@@ -1,17 +1,21 @@
-﻿using System.Configuration;
+﻿using System.Collections.Specialized;
+using System.Configuration;
+using System.Data;
+using System.Data.Common;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection.Metadata.Ecma335;
+using System.Runtime.InteropServices;
 
 using databaseAPI;
 
 using EASendMail;
 
-using gnaDataClasses;
-
 using GNA_CommercialLicenseValidator;
+
+using gnaDataClasses;
 
 using GNAgeneraltools;
 
@@ -19,16 +23,18 @@ using GNAspreadsheettools;
 
 using GNAsurveytools;
 
-using T4Dlibrary;
-
 using Microsoft.Data.SqlClient;
 
 using OfficeOpenXml;
+
+using T4Dlibrary;
 
 using Twilio.Rest.Api.V2010.Account;
 using Twilio.Rest.Sync.V1.Service.SyncStream;
 using Twilio.TwiML.Messaging;
 using Twilio.TwiML.Voice;
+
+using static T4Dlibrary.T4Dapi;
 
 
 
@@ -62,107 +68,194 @@ namespace TrackGeometryReport
 
                 //================[Instantiate the classes]======================================
 
-                #region Initial setup
-
-
-
+                #region Setting state
+                Console.OutputEncoding = System.Text.Encoding.Unicode;
                 gnaTools gnaT = new();
                 GNAsurveycalcs gnaSurvey = new();
                 dbAPI gnaDBAPI = new();
                 spreadsheetAPI gnaSpreadsheetAPI = new(db: gnaDBAPI);
                 T4Dapi t4dapi = new();
 
-
-
-
-
-                Console.Clear();
-                int headingNo = 1;
-
-                // Welcome message
-                gnaT.WelcomeMessage($"SPN010TGR {BuildInfo.BuildDateString()}");
-                #endregion
-
-                #region Check Config file and license
-                Console.WriteLine($"{headingNo++}. Checking license and config file");
                 string strTab1 = "     ";
                 string strTab2 = "        ";
-                gnaT.VerifyLocalConfig();
-                var config = ConfigurationManager.AppSettings;
+                string strTab3 = "           ";
 
-                string licenseCode = config["LicenseCode"] ?? string.Empty;
-                if (string.IsNullOrEmpty(licenseCode))
-                {
-                    Console.WriteLine($"{strTab1}License code is not set in the configuration file.");
-                    return;
-                }
-
-                // GNA license for TrackGeometryReport software
-                Console.WriteLine($"{strTab1}Validating the software license...");
-
-                LicenseValidator.ValidateLicense("TrackGeometryReport", licenseCode);
-                Console.WriteLine($"{strTab2}Validated");
-
-                //==== Set the EPPlus license
-                gnaT.epplusLicense();
+                Console.OutputEncoding = System.Text.Encoding.Unicode;
+                Console.Out.Flush();
+                Console.Clear();
 
                 #endregion
 
+                #region Header
+                gnaT.WelcomeMessage($"TrackGeometryReport {BuildInfo.BuildDateString()}");
+                #endregion
 
-                #region Variables
-                Console.WriteLine($"{headingNo++}. Variables");
-                //================[Console settings]======================================
-                Console.OutputEncoding = System.Text.Encoding.Unicode;
+                #region Config validation
+                int headingNo = 1;
+                Console.WriteLine($"{headingNo++}. System Check");
+                gnaT.VerifyLocalConfig();
+                Console.WriteLine($"{strTab1}VerifyLocalConfig returned OK");
+                #endregion
 
-                //================[Declare variables]=====================================
+                #region Read config early
+                NameValueCollection config = ConfigurationManager.AppSettings;
+                bool freezeScreen = ConfigParsing.GetBoolYesNo(config, "freezeScreen");
+                bool prepareReferenceData = ConfigParsing.GetBoolYesNo(config, "prepareReferenceData");
+                bool computeMean = ConfigParsing.GetBoolYesNo(config, "computeMean");
+                bool debug = ConfigParsing.GetBoolYesNo(config, "debug");
+                string strcomputeMeans = computeMean ? "Yes" : "No";
+                string strFreezeScreen = freezeScreen ? "Yes" : "No";
+                string strPrepareReferenceData = prepareReferenceData ? "Yes" : "No";
+                #endregion
 
-                String[] strRO1 = new String[50];
-                String[] strWorksheetName = new String[50];
-                //string[] strTrackWorksheets = new String[50];
+                #region License validation
 
+                Console.WriteLine($"{strTab1}Validating software licenses");
+                string licenseCode = config["LicenseCode"] ?? string.Empty;
+                if (licenseCode.Length == 0)
+                    throw new ConfigurationErrorsException("\nLicenseCode missing/empty.");
+                LicenseValidator.ValidateLicense("GNATGR", licenseCode);
+                Console.WriteLine($"{strTab2}Software validated");
 
-                //================[Configuration variables]==================================================================
+                // Set the T4DAPI license: Software license expires 20260601
+                string T4DAPI_licenseCode = "Dm4eGwoTaGxqbGpr";
+                string Result = t4dapi.SetCommercial(T4DAPI_licenseCode);
+                if (Result != "YES")
+                {
+                    Console.WriteLine($"{strTab2}\nT4DAPI license validation failed: {Result}");
+                    throw new Exception("T4DAPI license validation failed.");
+                }
+                else
+                {
+                    Console.WriteLine($"{strTab2}T4DAPI validated");
+                }
+                gnaT.epplusLicense();
+                Console.WriteLine($"{strTab1}Done");
+                #endregion
+
+                #region EPPlus license
+                string strEpplusLicenseContext = ConfigParsing.GetRequiredString(config, "EPPlus:ExcelPackage.LicenseContext");
+                gnaT.epplusLicense();
+                #endregion
+
+                #region Workbook variables
+                // Always required
+                string strExcelPath = ConfigParsing.GetRequiredString(config, "ExcelPath");
+                string strExcelFile = ConfigParsing.GetRequiredString(config, "ExcelFile");
+                string strReferenceWorksheet = ConfigParsing.GetRequiredString(config, "ReferenceWorksheet");
+
+                // Optional (may be absent from config AND from this executable's usage)
+                string? strSurveyWorksheet = config["SurveyWorksheet"]?.Trim();
+                string? strTrackGeometryWorksheet = config["TrackGeometryWorksheet"]?.Trim();
+                string? strCalibrationWorksheet = config["CalibrationWorksheet"]?.Trim();
+                string? strHistoricDhWorksheet = config["HistoricDhWorksheet"]?.Trim();
+                string? strHistoricTopWorksheet = config["HistoricTopWorksheet"]?.Trim();
+                string? strHistoricTwistWorksheet = config["HistoricTwistWorksheet"]?.Trim();
+                string? strAlarmsWorksheet = config["AlarmsWorksheet"]?.Trim();
+                string? strLatestTiltWorksheet = config["LatestTiltWorksheet"]?.Trim();
+                string? strHistoricTiltWorksheet = config["HistoricTiltWorksheet"]?.Trim();
+                string? strHistoricDeltaTiltWorksheet = config["HistoricDeltaTiltWorksheet"]?.Trim();
+                string? strHistoricDeltaTiltAWorksheet = config["HistoricDeltaTiltAWorksheet"]?.Trim();
+                string? strHistoricDeltaTiltBWorksheet = config["HistoricDeltaTiltBWorksheet"]?.Trim();
+                string? strHistoricDeltaTiltCWorksheet = config["HistoricDeltaTiltCWorksheet"]?.Trim();
+                string? strLatestExtensometerWorksheet = config["LatestExtensometerWorksheet"]?.Trim();
+                string? strHistoricExtensometerWorksheet = config["HistoricExtensometerWorksheet"]?.Trim();
+                string? strHistoricDeltaExtensometerWorksheet = config["HistoricDeltaExtensometerWorksheet"]?.Trim();
+                string? strReportSpec = config["ReportSpec"]?.Trim();
+                string? strWorkbookPassword = config["WorkbookPassword"]?.Trim();
+
+                #endregion
+
+                #region Config variables
+                Console.WriteLine($"{headingNo++}. System variables");
 
                 string strDBconnection = ConfigurationManager.ConnectionStrings["DBconnectionString"].ConnectionString;
 
+                string strClient = ConfigParsing.GetRequiredString(config, "Client");
 
-                string strFreezeScreen = config["freezeScreen"];
+                string strProjectTitle = ConfigParsing.GetRequiredString(config, "ProjectTitle");
+
+                int iFirstDataRow = ConfigParsing.GetRequiredInt(config, "FirstDataRow");
+                int iFirstDataCol = ConfigParsing.GetRequiredInt(config, "FirstDataCol");
+                int iFirstOutputRow = ConfigParsing.GetRequiredInt(config, "FirstOutputRow");
+
+                string strTimeBlockType = ConfigParsing.GetRequiredString(config, "TimeBlockType");
+                string strManualBlockStart = ConfigParsing.GetRequiredString(config, "manualBlockStart");
+                string strManualBlockEnd = ConfigParsing.GetRequiredString(config, "manualBlockEnd");
+                string strBlockSizeHrs = ConfigParsing.GetRequiredString(config, "BlockSizeHrs");
+
                 string strStopAtAlarmMessage = config["stopAtAlarmMessage"];
                 string strAlarmVersion = config["AlarmVersion"];
                 string strDeleteMissingValues = config["DeleteMissingValues"];
                 string strLatestValueOnly = config["LatestValueOnly"];
                 string strRecordHistoricData = config["recordHistoricData"];
+                #endregion
 
-                string strProjectTitle = config["ProjectTitle"];
-                string strContractTitle = config["ContractTitle"];
-                string strReportType = config["ReportType"];
-                string strReportSpec = config["ReportSpec"];
-
-                string strExcelPath = config["ExcelPath"];
-                string strExcelFile = config["ExcelFile"];
-                string strCoordinateOrder = config["CoordinateOrder"];
-
-                string strReferenceWorksheet = config["ReferenceWorksheet"];
-                string strSurveyWorksheet = config["SurveyWorksheet"];
-                string strCalibrationWorksheet = config["CalibrationWorksheet"];
-                string strHistoricDhworksheet = config["HistoricDhworksheet"];
-                string strHistoricTopworksheet = config["HistoricTopworksheet"];
-                string strHistoricTwistworksheet = config["HistoricTwistworksheet"];
-                string strAlarmsWorksheet = config["AlarmsWorksheet"];
-
-                string strWorkbookPassword = config["WorkbookPassword"];
-
+                #region Report variables
+                string strContractTitle = ConfigParsing.GetRequiredString(config, "ContractTitle");
+                string strReportType = ConfigParsing.GetRequiredString(config, "ReportType");
                 string strIncludeHistoricTwist = config["includeHistoricTwist"];
                 string strIncludeHistoricSettlement = config["includeHistoricSettlement"];
                 string strIncludeHistoricTop = config["includeHistoricTop"];
                 string strIncludeMissingTargets = config["includeMissingTargets"];
+                #endregion
 
-                string strSystemLogsFolder = config["SystemStatusFolder"];
-                string strAlarmfolder = config["SystemAlarmFolder"];
+                #region System variables
+                string strMasterWorkbookFullPath = strExcelPath + strExcelFile;
+                Console.WriteLine($"{strTab1}Done");
+                #endregion
 
-                #region Track Definitions
+                #region General variables
+
+                Console.WriteLine($"{strTab1}General variables");
+
+                string strComputeMeanDeltas = CleanConfig(config["computeMean"]);
+                if (strComputeMeanDeltas.Length == 0) strComputeMeanDeltas = "No";
+
+                string strUpdateSensorList = CleanConfig(config["updateSensorList"]);
+                if (strUpdateSensorList.Length == 0) strUpdateSensorList = "No";
+
+                string strSystemLogsFolder = CleanConfig(config["SystemStatusFolder"]);
+                if (strSystemLogsFolder.Length == 0) strSystemLogsFolder = @"C:\__SystemLogs\";
+
+                string strAlarmfolder = CleanConfig(config["SystemAlarmFolder"]);
+                if (strAlarmfolder.Length == 0) strAlarmfolder = @"C:\__SystemAlarms\";
+
+                Directory.CreateDirectory(strSystemLogsFolder);
+                Directory.CreateDirectory(strAlarmfolder);
+
+                var cs = ConfigurationManager.ConnectionStrings["DBconnectionString"];
+                if (cs == null || string.IsNullOrWhiteSpace(cs.ConnectionString))
+                {
+                    string message = "\nMissing connection string 'DBconnectionString'.";
+                    Console.WriteLine(message);
+                    throw new ConfigurationErrorsException(message);
+                }
+
+                string strFirstDataRow = iFirstDataRow.ToString(CultureInfo.InvariantCulture);
+                string strFirstOutputRow = iFirstOutputRow.ToString(CultureInfo.InvariantCulture);
+
+                string strExcelWorkbookFullPath = Path.Combine(strExcelPath, strExcelFile);
+                if (!File.Exists(strExcelWorkbookFullPath))
+                {
+                    string message = $"Excel workbook not found: '{strExcelWorkbookFullPath}'.";
+                    Console.WriteLine(message);
+                    throw new FileNotFoundException(message, strExcelWorkbookFullPath);
+                }
+
+                string? strSPN010alarms = config["AlarmNotifications"];
+
+                double dblTimeZoneOffset = gnaDBAPI.getProjectTimeZoneOffset(strDBconnection, strProjectTitle);
+
+                #endregion
+
+                #region Track Variables
+                Console.WriteLine($"{strTab1}Track variables");
+                string strFirstDataCol = config["FirstDataCol"];
+                string strFirstTrackRow = config["FirstTrackRow"];
+
                 var strTrackWorksheets = new List<string>();
-                // Add the reference worksheet as the first item
+                // Add the reference Worksheet as the first item
                 strTrackWorksheets.Add(strReferenceWorksheet);
 
                 // Read all configured tracks dynamically (Track1, Track2, ..., TrackN)
@@ -177,66 +270,122 @@ namespace TrackGeometryReport
                 }
                 #endregion
 
-                string strFirstDataRow = config["FirstDataRow"];
-                string strFirstOutputRow = config["FirstOutputRow"];
-                string strFirstDataCol = config["FirstDataCol"];
-                string strFirstTrackRow = config["FirstTrackRow"];
+                #region Email settings
+                Console.WriteLine($"{strTab1}Email settings");
 
-                string strTimeBlockType = config["TimeBlockType"];
-                string strManualBlockStart = config["manualBlockStart"];
-                string strManualBlockEnd = config["manualBlockEnd"];
-                string strBlockSizeHrs = config["BlockSizeHrs"];
+                string strSendEmail = CleanConfig(config["SendEmails"]);
+                string strIsBodyHtml = CleanConfig(config["IsBodyHtml"]);
+                string strEmailTransmissionDays = CleanConfig(config["EmailTransmissionDays"]);
+                string strEmailTransmissionTime = CleanConfig(config["EmailTransmissionTime"]);
 
+                string strEmailLogin = CleanConfig(config["EmailLogin"]);
+                string strEmailPassword = CleanConfig(config["EmailPassword"]);
+                string strEmailFrom = CleanConfig(config["EmailFrom"]);
+                string strEmailRecipients = CleanConfig(config["EmailRecipients"]);
+                dblTimeZoneOffset = gnaDBAPI.getProjectTimeZoneOffset(strDBconnection, strProjectTitle);
 
+                EmailCredentials emailCreds = gnaT.BuildEmailCredentials(
+                    strEmailLogin: strEmailLogin,
+                    strEmailPassword: strEmailPassword,
+                    strEmailFrom: strEmailFrom,
+                    strEmailRecipients: strEmailRecipients,
+                    strSendEmail: strSendEmail,
+                    strIsBodyHtml: strIsBodyHtml,
+                    strEmailTransmissionDays: strEmailTransmissionDays,
+                    strEmailTransmissionTime: strEmailTransmissionTime,
+                    dblTimeZoneOffset: dblTimeZoneOffset,
+                    strSystemLogsFolder: strSystemLogsFolder);
+                #endregion
+
+                #region SMS settings
+                Console.WriteLine($"{strTab1}SMS settings");
+
+                string? strSMSTitle = config["SMSTitle"]?.Trim();
+                string strMobileList = "";
+
+                List<string> smsMobile = new();
+                foreach (string key in config.AllKeys.Where(k =>
+                             !string.IsNullOrWhiteSpace(k) &&
+                             k.StartsWith("RecipientPhone", StringComparison.OrdinalIgnoreCase)))
+                {
+                    string phoneNumber = gnaT.NormalizePhoneNumber(config[key], key);
+                    smsMobile.Add(phoneNumber);
+
+                    if (strMobileList.Length > 0) strMobileList += ",";
+                    strMobileList += phoneNumber;
+                }
+                #endregion
+
+                #region Operational Variables
+
+                // ---- Arrays and collections ----
+                string[] strRO1 = new string[50];
+                string[] strWorksheetName = new string[50];
+                string[,] strSensorID = new string[5000, 2];
+                string[,] strPointDeltas = new string[5000, 2];
+                string[] strPointNames;
+
+                // ---- Configuration-derived values ----
+                string strCoordinateOrder = config["CoordinateOrder"];
+                string strSendEmails = config["SendEmails"];
+
+                // ---- Time block and messaging ----
                 string strTimeBlockStartLocal = "";
                 string strTimeBlockEndLocal = "";
                 string strTimeBlockStartUTC = "";
                 string strTimeBlockEndUTC = "";
                 string strEmailTime = "";
+                string strDateTime = "";
                 string logFileMessage = "";
 
+                // ---- Working strings and file paths ----
                 string strTempString = "";
-
-                string strSPN010alarms = config["SPN010alarmNotifications"];
-                string strSMSTitle = config["SMSTitle"];
-
-                int iRow = Convert.ToInt32(strFirstDataRow);
-                int iReferenceFirstDataRow = Convert.ToInt32(strFirstDataRow);
-                int iFirstOutputRow = Convert.ToInt32(strFirstOutputRow);
-                int iCol = Convert.ToInt32(strFirstDataCol);
-                int iFirstTrackRow = Convert.ToInt32(strFirstTrackRow);
-
-                string strSendEmails = config["SendEmails"];
-                string strEmailLogin = config["EmailLogin"];
-                string strEmailPassword = config["EmailPassword"];
-                string strEmailFrom = config["EmailFrom"];
-                string strEmailRecipients = config["EmailRecipients"];
-
-
-                string strMasterWorkbookFullPath = strExcelPath + strExcelFile;
-                string[,] strSensorID = new string[5000, 2];
-                string[,] strPointDeltas = new string[5000, 2];
-                string strDateTime = "";
                 string strMasterFile = "";
                 string strWorkingFile = "";
                 string strExportFile = "";
 
-                List<string> smsMobile = new();
-                string strMobileList = "";
-                var allKeys = config.AllKeys;
-                var recipientKeys = allKeys.Where(k => k != null && k.StartsWith("RecipientPhone"));
+                // ---- Row and column positions ----
+                int iRow = Convert.ToInt32(strFirstDataRow);
+                int iReferenceFirstDataRow = Convert.ToInt32(strFirstDataRow);
+                int iCol = Convert.ToInt32(strFirstDataCol);
+                int iFirstTrackRow = Convert.ToInt32(strFirstTrackRow);
 
-                foreach (string key1 in recipientKeys)
-                {
-                    string value = config[key1];
-                    if (!string.IsNullOrWhiteSpace(value))
-                    {
-                        smsMobile.Add(value);
-                        if (strMobileList != "") strMobileList += ",";
-                        strMobileList += value;
-                    }
-                }
                 Console.WriteLine($"{strTab1}Assigned");
+                #endregion
+
+                #region populate the RuntimeEnvironment class
+
+                gnaDataClasses.RuntimeEnvironment runtimeEnvironment = new()
+                {
+                    // ---- Database ----
+                    DbConnectionString = strDBconnection,
+                    ProjectTitle = strProjectTitle,
+
+                    // ---- Workbook ----
+                    ExcelPath = strExcelPath,
+                    ExcelFile = strExcelFile,
+
+                    // ---- Worksheets ----
+                    ReferenceWorksheet = strReferenceWorksheet,
+                    SurveyWorksheet = strSurveyWorksheet,
+                    TrackGeometryWorksheet = strTrackGeometryWorksheet,
+                    HistoricTopWorksheet = strHistoricTopWorksheet,
+                    HistoricTwistWorksheet = strHistoricTwistWorksheet,
+
+                    // ---- Row/Col configuration ----
+                    FirstDataRow = iFirstDataRow,
+                    FirstDataCol = iFirstDataCol,
+                    FirstOutputRow = iFirstOutputRow
+                };
+
+                #endregion
+
+                #region Clean exit
+                void FinishAndExit()
+                {
+                    Console.WriteLine("\nSensor report completed...\n\n");
+                    gnaT.freezeScreen(strFreezeScreen);
+                }
                 #endregion
 
                 #region Environment check
@@ -247,43 +396,21 @@ namespace TrackGeometryReport
                     gnaDBAPI.testDBconnection(strDBconnection);
                     Console.WriteLine($"{strTab2}Done");
 
-                    Console.WriteLine($"{strTab1}Check existence of workbook & worksheets");
+                    Console.WriteLine($"{strTab1}Check existence of workbook & Worksheets");
 
                     Console.WriteLine($"{strTab2}Project: {strProjectTitle}");
                     Console.WriteLine($"{strTab2}Report type: {strReportSpec}");
                     Console.WriteLine($"{strTab2}Master workbook: {strExcelFile}");
+
+                    string strResult = t4dapi.GetProjectID(strDBconnection, strProjectTitle);
+                    Console.WriteLine($"{strTab2}ProjectID: {strResult}");
+
                     gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strReferenceWorksheet);
                     gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strSurveyWorksheet);
+                    gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strTrackGeometryWorksheet);
+                    gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricTopWorksheet);
+                    gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricTwistWorksheet);
                     gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strAlarmsWorksheet);
-
-                    if (strIncludeHistoricSettlement == "Yes")
-                    {
-                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricDhworksheet);
-                    }
-                    if (strIncludeHistoricTop == "Yes")
-                    {
-                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricTopworksheet);
-                    }
-
-
-                    int i = 1;  // skip index 0 (reference worksheet)
-
-                    while (i < strTrackWorksheets.Count)
-                    {
-                        string entry = strTrackWorksheets[i];
-                        if (string.IsNullOrWhiteSpace(entry))
-                            break;  // stop safely on empty/missing values
-
-                        string strTrackWorksheet = entry.Trim();
-                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strTrackWorksheet);
-                        if (strIncludeHistoricTwist == "Yes")
-                        {
-                            gnaSpreadsheetAPI.checkWorksheetExists(
-                                strMasterWorkbookFullPath,
-                                strTrackWorksheet + "_HistoricTwist");
-                        }
-                        i++;
-                    }
                     Console.WriteLine($"{strTab1}Done");
                 }
                 else
@@ -295,47 +422,53 @@ namespace TrackGeometryReport
 
                 #endregion
 
+                #region Time blocks
+                Console.WriteLine($"{headingNo++}. Time blocks");
+                List<Tuple<string, string>> subBlocks = new();
 
-                #region Timeblocks
+                dblTimeZoneOffset = gnaDBAPI.getProjectTimeZoneOffset(strDBconnection, strProjectTitle);
+                Console.WriteLine($"{strTab1}Project time zone offset: {dblTimeZoneOffset} hrs");
 
-                //==== Prepare the time block
-                Console.WriteLine($"{headingNo++}. Timeblocks");
+
                 switch (strTimeBlockType)
                 {
-                    case "Manual":
-                        strTimeBlockStartLocal = strManualBlockStart;
-                        strTimeBlockEndLocal = strManualBlockEnd;
-                        strTimeBlockStartUTC = gnaT.convertLocalToUTC(strTimeBlockStartLocal);
-                        strTimeBlockEndUTC = gnaT.convertLocalToUTC(strTimeBlockEndLocal);
-                        strEmailTime = string.Concat(strTimeBlockEndLocal.Replace("'", ""), "m");
+                    case "Historic":
+                        subBlocks = gnaT.prepareTimeBlocksWithTimeZoneOffset(
+                            "Historic",
+                            strBlockSizeHrs,
+                            strManualBlockStart,
+                            strManualBlockEnd,
+                            dblTimeZoneOffset);
                         break;
-                    case "Schedule":
 
-                        //double dblStartTimeOffset = -1.0 * Convert.ToDouble(strTimeOffsetHrs);
-                        double dblEndTimeOffset = -1.0 * Convert.ToDouble(strBlockSizeHrs);
-                        strTimeBlockEndLocal = " '" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "' ";
-                        strTimeBlockStartLocal = " '" + DateTime.Now.AddHours(dblEndTimeOffset).ToString("yyyy-MM-dd HH:mm:ss") + "' ";
-                        strTimeBlockStartUTC = gnaT.convertLocalToUTC(strTimeBlockStartLocal);
-                        strTimeBlockEndUTC = gnaT.convertLocalToUTC(strTimeBlockEndLocal);
+                    case "Manual":
+                        subBlocks = gnaT.prepareTimeBlocksWithTimeZoneOffset(
+                            "Manual",
+                            strManualBlockStart,
+                            strManualBlockEnd,
+                            dblTimeZoneOffset);
                         break;
+
+                    case "Schedule":
+                        subBlocks = gnaT.prepareTimeBlocksWithTimeZoneOffset(
+                            "Schedule",
+                            strBlockSizeHrs,
+                            strManualBlockStart,
+                            strManualBlockEnd,
+                            dblTimeZoneOffset);
+                        break;
+
                     default:
                         Console.WriteLine("\nError in Timeblock Type");
-                        Console.WriteLine(strTab1 + "Time block type: " + strTimeBlockType);
-                        Console.WriteLine(strTab1 + "Must be Manual or Schedule");
-                        Console.WriteLine("\nPress key to exit..."); Console.ReadKey();
-                        goto ThatsAllFolks;
+                        Console.WriteLine("Time block type: " + strTimeBlockType);
+                        Console.WriteLine("Must be Manual, Schedule or Historic");
+                        Console.WriteLine("\nPress key to exit...");
+                        Console.ReadKey();
+                        Environment.Exit(1);
                         break;
                 }
 
-                strDateTime = DateTime.Now.ToString("yyyyMMdd_HHmm");
-                string strDateTimeUTC = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm");   //2022-07-26 13:45:15
-                string strTimeStamp = strTimeBlockEndLocal + "\n(local)";
-
-                Console.WriteLine($"{strTab1}Time block type: {strTimeBlockType}");
-                Console.WriteLine($"{strTab2}{strTimeBlockStartLocal.Replace("'", "")} Local");
-                Console.WriteLine($"{strTab2}{strTimeBlockEndLocal.Replace("'", "")} Local");
-                string strTimeStampLocal = "";
-
+                string strTimeStampLocal;
                 if (strTimeBlockType == "Manual")
                 {
                     string strTemp = strEmailTime.Replace(":", "").Replace("-", "").Replace(" ", "_");
@@ -351,59 +484,185 @@ namespace TrackGeometryReport
                     strMasterFile = strExcelPath + strExcelFile;
                     strTimeStampLocal = strDateTime;
                 }
+
+                Console.WriteLine($"{strTab1}Done");
+                #endregion
+
+                #region Survey Worksheet update
+                Console.WriteLine($"{headingNo++}. {strSurveyWorksheet} worksheet update");
+
+                if (freezeScreen)
+                {
+                    Console.WriteLine($"{strTab1}Read point names");
+                    strPointNames = gnaSpreadsheetAPI.readPointNames(
+                        strMasterWorkbookFullPath,
+                        strSurveyWorksheet,
+                        iFirstDataRow.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+                    Console.WriteLine($"{strTab1}Extract SensorID");
+                    strSensorID = gnaDBAPI.getSensorIDfromDB(strDBconnection, strPointNames, strProjectTitle);
+
+                    if (debug)
+                    {
+                        int counter = 0;
+                        Console.WriteLine($"\nstrProjectTitle: {strProjectTitle}");
+
+                        while (counter < strSensorID.GetLength(0))
+                        {
+                            string name = (strSensorID[counter, 0] ?? string.Empty).Trim();
+                            if (name == "NoMore") break;
+                            string id = (strSensorID[counter, 1] ?? string.Empty).Trim();
+                            Console.WriteLine($"{counter}  {name}  {id}");
+                            counter++;
+                        }
+                        Console.WriteLine("\n");
+                    }
+
+                    Console.WriteLine($"{strTab1}Update SensorID");
+                    gnaSpreadsheetAPI.writeSensorID(
+                        strMasterWorkbookFullPath,
+                        strSurveyWorksheet,
+                        strSensorID,
+                        iFirstDataRow.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    Console.WriteLine($"{strTab1}Done");
+                }
+                else
+                {
+                    Console.WriteLine($"{strTab1}No{strSurveyWorksheet} preparation ");
+                }
+                #endregion
+
+                #region Create prism sensor list
+                Console.WriteLine($"{headingNo++}. Create sensor list: Prisms");
+
+                List<Sensor> sensorsList = gnaSpreadsheetAPI.readSensors(
+                    runtimeEnvironment: runtimeEnvironment);
+
+                SensorType sensorTypeList = t4dapi.DetermineAvailableSensorTypes(
+                    sensorsList: sensorsList);
+
+                List<Sensor> prismSensorsList = sensorsList
+                    .Where(sensor => sensor.SensorID != "Missing" && sensor.SensorType == "Prism")
+                    .ToList();
+
+                List<Points> prismList = t4dapi.GetSensorList(strDBconnection, strProjectTitle);
+
+                Console.WriteLine($"{strTab1}Prism list: {prismSensorsList.Count.ToString(CultureInfo.InvariantCulture)}");
+                #endregion
+
+                #region Run header log
+                Console.WriteLine($"{headingNo++}. Write header log");
+                {
+                    string runHeader =
+                        $"GNA_TrackGeometryReport | Run start | Build={BuildInfo.BuildDateString()} | Project='{strProjectTitle}' | Contract='{strContractTitle}' | " +
+                        $"Mode={(prepareReferenceData ? "prepareReferenceData" : "Export")} | TimeBlockType='{strTimeBlockType}' | " +
+                        $"ManualStart='{strManualBlockStart}' | ManualEnd='{strManualBlockEnd}' | BlockSizeHrs='{strBlockSizeHrs}' | " +
+                        $"computeMean='{strcomputeMeans}' | " +
+                        $"Workbook='{strExcelWorkbookFullPath}' | SurveyWS='{strSurveyWorksheet}' | FirstRow={iFirstDataRow}";
+                    gnaT.updateSystemLogFile(strSystemLogsFolder, runHeader);
+                }
                 Console.WriteLine($"{strTab1}Done");
                 #endregion
 
 
-                #region Prepare Deltas
-                Console.WriteLine($"{headingNo++}. Prepare deltas");
-                //==== Process data ===================================================================================
-                Console.WriteLine($"{strTab1}Extract point names");
-                string[] strPointNames = gnaSpreadsheetAPI.readPointNames(strMasterFile, strSurveyWorksheet, strFirstDataRow);
-                Console.WriteLine($"{strTab2}Done");
-                Console.WriteLine($"{strTab1}Extract SensorID");
-                strSensorID = gnaDBAPI.getSensorIDfromDB(strDBconnection, strPointNames, strProjectTitle);
-                Console.WriteLine($"{strTab2}Done");
-                Console.WriteLine($"{strTab1}Write SensorID to workbook");
-                gnaSpreadsheetAPI.writeSensorID(strMasterFile, strSurveyWorksheet, strSensorID, strFirstDataRow);
-                Console.WriteLine($"{strTab2}Done");
 
-                if (strLatestValueOnly == "Yes")
+                #region Prepare reference data
+                Console.WriteLine($"{headingNo++}. Prepare reference data");
+
+                List<SensorObservation> blockResults = new();
+
+                if (prepareReferenceData)
                 {
-                    Console.WriteLine($"{strTab1}Extract latest deltas for time block");
-                    strPointDeltas = gnaDBAPI.getLatestDeltasFromDB(strDBconnection, strProjectTitle, strTimeBlockStartUTC, strTimeBlockEndUTC, strSensorID);
-                    strTempString = "latest";
-                    Console.WriteLine($"{strTab2}Done");
+                    Console.WriteLine($"{strTab1}Extract prism reference data");
+
+                    string blockStartUTC = gnaT.convertLocalToUTCWithTimeZoneOffset(
+                        localTime: strManualBlockStart,
+                        dblTimeZoneOffset: dblTimeZoneOffset);
+                    string blockEndUTC = gnaT.convertLocalToUTCWithTimeZoneOffset(
+                        localTime: strManualBlockEnd,
+                        dblTimeZoneOffset: dblTimeZoneOffset);
+
+                    List<Points> referenceDeltas = t4dapi.GetAllPointsMeanDeltas(
+                        dbConnection: strDBconnection,
+                        projectTitle: strProjectTitle,
+                        timeBlockStartUTC: blockStartUTC,
+                        timeBlockEndUTC: blockEndUTC,
+                        iTimeIntervalHours: null);
+
+                    #region Echo selected Points fields to screen if no deltas were retrieved
+                    if (referenceDeltas.Count == 0)
+                    {
+                        Console.WriteLine("\nNo deltas were returned..");
+                        Console.WriteLine($"prismList: {prismList.Count}");
+                        Console.WriteLine($"strTimeBlockType: {strTimeBlockType}");
+                        Console.WriteLine($"blockStartUTC: {blockStartUTC}");
+                        Console.WriteLine($"blockEndUTC: {blockEndUTC}");
+                        Console.WriteLine($"strComputeMeanDeltas: {strComputeMeanDeltas}");
+                        Console.WriteLine($"dblTimeZoneOffset: {dblTimeZoneOffset}\n");
+                    }
+
+
+                    // pass the extracted values across into the parent prismList
+
+                    prismList = t4dapi.combinePointsLists(parentList: prismList, childList: referenceDeltas);
+                    string result = t4dapi.writeDeltasToReferenceWorksheet(
+                        prismList: prismList,
+                        blockStartUTC: blockStartUTC,
+                        blockEndUTC: blockEndUTC,
+                        runtimeEnvironment: runtimeEnvironment);
+                    Console.WriteLine($"{strTab1}{result}");
+
+
+                    Console.WriteLine("\nStop here");
+                    Console.ReadKey();
+
+                    #endregion
+
+
+
+
+
+
+
+
+
+
+                    Console.WriteLine($"{strTab2}Prism");
+
+
+
+                    Console.WriteLine($"{strTab1}Reference deltas written to {strSurveyWorksheet} worksheet");
+
+
+                    //goto ThatsAllFolks;
+
 
                 }
                 else
                 {
-                    Console.WriteLine($"{strTab1}Extract mean deltas for UTC time block");
-                    Console.WriteLine($"{strTab2}{strTimeBlockStartUTC.Replace("'", "")}");
-                    Console.WriteLine($"{strTab2}{strTimeBlockEndUTC.Replace("'", "")}");
-                    strPointDeltas = gnaDBAPI.getMeanDeltasFromDB(strDBconnection, strProjectTitle, strTimeBlockStartUTC, strTimeBlockEndUTC, strSensorID);
-                    strTempString = "mean";
-                    Console.WriteLine($"{strTab2}Done");
+                    Console.WriteLine($"{strTab1}No reference deltas generated.");
                 }
 
-                Console.WriteLine($"{strTab1}Write {strTempString} deltas & timestamp to master workbook");
-                string strBlockStart = strTimeBlockStartUTC.Replace("'", "").Trim();
-                string strBlockEnd = strTimeBlockEndUTC.Replace("'", "").Trim();
-
-                gnaSpreadsheetAPI.writeLatestDeltas(
-                    strMasterFile,
-                    strReferenceWorksheet,
-                    strPointDeltas,
-                    iRow, iCol, strBlockStart,
-                    strBlockEnd,
-                    strCoordinateOrder);
-
-                gnaSpreadsheetAPI.writeTimeStampLocal(
-                    strMasterFile,
-                    strReferenceWorksheet,
-                    strTimeStampLocal);
-                Console.WriteLine($"{strTab2}Done");
                 #endregion
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
                 #region Write historic data
@@ -412,12 +671,12 @@ namespace TrackGeometryReport
                 if (strAlarmVersion == "Yes")
                 {
                     Console.WriteLine($"{strTab1}Alarm version activated - skipping historic data update.");
-                    goto CalibrationData;
+                    goto EntryPoint1;
                 }
                 else if (strRecordHistoricData != "Yes")
                 {
                     Console.WriteLine($"{strTab1}Historic data recording not activated - skipping historic data update.");
-                    goto CalibrationData;
+                    goto EntryPoint1;
                 }
 
                 Console.WriteLine($"{strTab1}Write historic twist");
@@ -430,7 +689,7 @@ namespace TrackGeometryReport
 
                     if (strTrackWorksheets == null || strTrackWorksheets.Count <= 1)
                     {
-                        Console.WriteLine($"{strTab2}No valid track worksheets supplied.");
+                        Console.WriteLine($"{strTab2}No valid track Worksheets supplied.");
                     }
                     else
                     {
@@ -451,7 +710,7 @@ namespace TrackGeometryReport
                             string trimmed = entry.Trim();
 
                             string strTrackWorksheet = trimmed;
-                            string strHistoricTwistWorksheet = strTrackWorksheet + "_HistoricTwist";
+
 
                             Console.WriteLine(strTab2 + strHistoricTwistWorksheet);
 
@@ -472,7 +731,7 @@ namespace TrackGeometryReport
                                 int iDestinationCol = iFirstEmptyCol;
 
 
-                                // Find the last data row in the Historic Twist worksheet
+                                // Find the last data row in the Historic Twist Worksheet
                                 int iNoOfPrisms = gnaSpreadsheetAPI.countPrisms(strMasterFile, strHistoricTwistWorksheet, "8", 1);
                                 int iRowEnd = 8 + iNoOfPrisms;
 
@@ -482,9 +741,9 @@ namespace TrackGeometryReport
                                     // Copy the header cells
                                     gnaSpreadsheetAPI.copyColumnSubRange(
                                         strMasterFile,
-                                        strHistoricTwistWorksheet,  // source worksheet
+                                        strHistoricTwistWorksheet,  // source Worksheet
                                         3,                      // source column
-                                        strHistoricTwistWorksheet, // destination worksheet
+                                        strHistoricTwistWorksheet, // destination Worksheet
                                         iFirstEmptyCol,         // destination column
                                         6,                      // source start row
                                         7,                      // source end end
@@ -502,10 +761,10 @@ namespace TrackGeometryReport
 
 
                                     // Insert the data range
-                                    iSourceCol = 12;     // Column AW in the reference worksheet (dH in mm);
-                                    int iSourceRowStart = 8;   // Row 2 in the reference worksheet
-                                    int iSourceRowEnd = iRowEnd;  // Last row in the source worksheet containing rail prisms.
-                                    int iDestinationRowStart = 8; // Row 8 in the historic dH worksheet
+                                    iSourceCol = 12;     // Column AW in the reference Worksheet (dH in mm);
+                                    int iSourceRowStart = 8;   // Row 2 in the reference Worksheet
+                                    int iSourceRowEnd = iRowEnd;  // Last row in the source Worksheet containing rail prisms.
+                                    int iDestinationRowStart = 8; // Row 8 in the historic dH Worksheet
                                     iDestinationCol = iFirstEmptyCol;
 
                                     try
@@ -513,9 +772,9 @@ namespace TrackGeometryReport
                                         // Copy the data cells
                                         gnaSpreadsheetAPI.copyColumnSubRange(
                                             strMasterFile,
-                                            strTrackWorksheet,      // source worksheet
+                                            strTrackWorksheet,      // source Worksheet
                                             iSourceCol,             // source column
-                                            strHistoricTwistWorksheet, // destination worksheet
+                                            strHistoricTwistWorksheet, // destination Worksheet
                                             iDestinationCol,        // destination column
                                             iSourceRowStart,        // source start row
                                             iSourceRowEnd,          // source end row
@@ -556,25 +815,25 @@ namespace TrackGeometryReport
 
                     string strHeaderTime = strTimeBlockEndLocal.Replace("'", "").Trim();
 
-                    // Find first empty column in the Historic data worksheet
+                    // Find first empty column in the Historic data Worksheet
                     int iFirstEmptyCol = gnaSpreadsheetAPI.findFirstEmptyColumn(
                         strMasterFile,
-                        strHistoricDhworksheet,
+                        strHistoricDhWorksheet,
                         "6",
                         "1");
 
 
-                    // Find the last data row in the Historic data worksheet
-                    int iNoOfPrisms = gnaSpreadsheetAPI.countPrisms(strMasterFile, strHistoricDhworksheet, "8", 1);
+                    // Find the last data row in the Historic data Worksheet
+                    int iNoOfPrisms = gnaSpreadsheetAPI.countPrisms(strMasterFile, strHistoricDhWorksheet, "8", 1);
                     int iRowEnd = 8 + iNoOfPrisms;
 
 
                     // Copy the header cells
                     gnaSpreadsheetAPI.copyColumnSubRange(
                         strMasterFile,
-                        strHistoricDhworksheet,  // source worksheet
+                        strHistoricDhWorksheet,  // source Worksheet
                         3,                      // source column
-                        strHistoricDhworksheet, // destination worksheet
+                        strHistoricDhWorksheet, // destination Worksheet
                         iFirstEmptyCol,         // destination column
                         6,                      // source start row
                         7,                      // source end end
@@ -585,7 +844,7 @@ namespace TrackGeometryReport
                     // Insert the timestamp
                     gnaSpreadsheetAPI.writeVarToCell(
                         strMasterFile,
-                        strHistoricDhworksheet,
+                        strHistoricDhWorksheet,
                         5,
                         iFirstEmptyCol,
                         strHeaderTime);
@@ -594,14 +853,14 @@ namespace TrackGeometryReport
                     // Insert data range
                     if (iFirstEmptyCol <= 1)
                     {
-                        Console.WriteLine($"{strTab1}WARN: Invalid column index ({iFirstEmptyCol}) for '{strHistoricDhworksheet}'. Skipping.");
+                        Console.WriteLine($"{strTab1}WARN: Invalid column index ({iFirstEmptyCol}) for '{strHistoricDhWorksheet}'. Skipping.");
                     }
                     else
                     {
-                        int iSourceCol = 49;     // Column AW in the reference worksheet (dH in mm);
-                        int iSourceRowStart = 2;   // Row 2 in the reference worksheet
-                        int iSourceRowEnd = iSourceRowStart + iNoOfPrisms - 1;  // Last row in the reference worksheet containing rail prisms.
-                        int iDestinationRowStart = 8; // Row 8 in the historic dH worksheet
+                        int iSourceCol = 49;     // Column AW in the reference Worksheet (dH in mm);
+                        int iSourceRowStart = 2;   // Row 2 in the reference Worksheet
+                        int iSourceRowEnd = iSourceRowStart + iNoOfPrisms - 1;  // Last row in the reference Worksheet containing rail prisms.
+                        int iDestinationRowStart = 8; // Row 8 in the historic dH Worksheet
                         int iDestinationCol = iFirstEmptyCol;
 
                         try
@@ -609,9 +868,9 @@ namespace TrackGeometryReport
                             // Copy the data cells
                             gnaSpreadsheetAPI.copyColumnSubRange(
                                 strMasterFile,
-                                strReferenceWorksheet,  // source worksheet
+                                strReferenceWorksheet,  // source Worksheet
                                 iSourceCol,             // source column
-                                strHistoricDhworksheet, // destination worksheet
+                                strHistoricDhWorksheet, // destination Worksheet
                                 iDestinationCol,        // destination column
                                 iSourceRowStart,        // source start row
                                 iSourceRowEnd,          // source end row
@@ -620,7 +879,7 @@ namespace TrackGeometryReport
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine(strTab1 + $"ERROR copying from '{strReferenceWorksheet}' → '{strHistoricDhworksheet}\n': {ex.Message}");
+                            Console.WriteLine(strTab1 + $"ERROR copying from '{strReferenceWorksheet}' → '{strHistoricDhWorksheet}\n': {ex.Message}");
                             Console.ReadKey();
                         }
 
@@ -643,24 +902,24 @@ namespace TrackGeometryReport
 
                     string strHeaderTime = strTimeBlockEndLocal.Replace("'", "").Trim();
 
-                    // Find first empty column in the Historic data worksheet
+                    // Find first empty column in the Historic data Worksheet
                     int iFirstEmptyCol = gnaSpreadsheetAPI.findFirstEmptyColumn(
                         strMasterFile,
-                        strHistoricTopworksheet,
+                        strHistoricTopWorksheet,
                         "6",
                         "1");
 
 
-                    // Find the last data row in the Historic data worksheet
-                    int iNoOfPrisms = gnaSpreadsheetAPI.countPrisms(strMasterFile, strHistoricTopworksheet, "8", 1);
+                    // Find the last data row in the Historic data Worksheet
+                    int iNoOfPrisms = gnaSpreadsheetAPI.countPrisms(strMasterFile, strHistoricTopWorksheet, "8", 1);
                     int iRowEnd = 8 + iNoOfPrisms;
 
                     // Copy the header cells
                     gnaSpreadsheetAPI.copyColumnSubRange(
                         strMasterFile,
-                        strHistoricTopworksheet,  // source worksheet
+                        strHistoricTopWorksheet,  // source Worksheet
                         3,                      // source column
-                        strHistoricTopworksheet, // destination worksheet
+                        strHistoricTopWorksheet, // destination Worksheet
                         iFirstEmptyCol,         // destination column
                         6,                      // source start row
                         7,                      // source end end
@@ -671,7 +930,7 @@ namespace TrackGeometryReport
                     // Insert the timestamp
                     gnaSpreadsheetAPI.writeVarToCell(
                         strMasterFile,
-                        strHistoricTopworksheet,
+                        strHistoricTopWorksheet,
                         5,
                         iFirstEmptyCol,
                         strHeaderTime);
@@ -680,23 +939,23 @@ namespace TrackGeometryReport
                     // Insert data range
                     if (iFirstEmptyCol <= 1)
                     {
-                        Console.WriteLine($"{strTab2}WARN: Invalid column index ({iFirstEmptyCol}) for '{strHistoricTopworksheet}'. Skipping.");
+                        Console.WriteLine($"{strTab2}WARN: Invalid column index ({iFirstEmptyCol}) for '{strHistoricTopWorksheet}'. Skipping.");
                     }
                     else
                     {
-                        int iSourceCol = 50;     // Column AX in the reference worksheet (Top in mm);
-                        int iSourceRowStart = 2;   // Row 2 in the reference worksheet
-                        int iSourceRowEnd = iSourceRowStart + iNoOfPrisms - 1;  // Last row in the reference worksheet containing rail prisms.
-                        int iDestinationRowStart = 8; // Row 8 in the historic dH worksheet
+                        int iSourceCol = 50;     // Column AX in the reference Worksheet (Top in mm);
+                        int iSourceRowStart = 2;   // Row 2 in the reference Worksheet
+                        int iSourceRowEnd = iSourceRowStart + iNoOfPrisms - 1;  // Last row in the reference Worksheet containing rail prisms.
+                        int iDestinationRowStart = 8; // Row 8 in the historic dH Worksheet
                         int iDestinationCol = iFirstEmptyCol;
                         try
                         {
                             // Copy the data cells
                             gnaSpreadsheetAPI.copyColumnSubRange(
                                 strMasterFile,
-                                strReferenceWorksheet,  // source worksheet
+                                strReferenceWorksheet,  // source Worksheet
                                 iSourceCol,             // source column
-                                strHistoricTopworksheet, // destination worksheet
+                                strHistoricTopWorksheet, // destination Worksheet
                                 iDestinationCol,        // destination column
                                 iSourceRowStart,        // source start row
                                 iSourceRowEnd,          // source end row
@@ -705,7 +964,7 @@ namespace TrackGeometryReport
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"{strTab2}ERROR copying from '{strReferenceWorksheet}' → '{strHistoricTopworksheet}\n': {ex.Message}");
+                            Console.WriteLine($"{strTab2}ERROR copying from '{strReferenceWorksheet}' → '{strHistoricTopWorksheet}\n': {ex.Message}");
                             Console.ReadKey();
                         }
 
@@ -717,21 +976,10 @@ namespace TrackGeometryReport
                 }
 
                 Console.WriteLine($"{strTab1}Done");
-#endregion
-
-
-CalibrationData:
-
-#region Calibration data
-
-                Console.WriteLine($"{headingNo++}. Calibration data");
-                Console.WriteLine($"{strTab1}Skip this section");
-                //string strDistanceColumn = "3";
-                //gnaSpreadsheetAPI.populateCalibrationWorksheet(strDBconnection, strTimeBlockStartUTC, strTimeBlockEndUTC, strWorkingFile, strCalibrationWorksheet, strFirstOutputRow, strDistanceColumn, strProjectTitle);
-
                 #endregion
 
-                #region Top,twist, missing targets alarms
+EntryPoint1:
+#region Top,twist, missing targets alarms
                 Console.WriteLine($"{headingNo++}. Top,Twist,Long Twist, missing targets alarm state & SMS if alarms");
 
                 string strAlarmMessage = gnaSpreadsheetAPI.SPN010AlarmState(
@@ -803,7 +1051,7 @@ CalibrationData:
 
                 Console.WriteLine($"{strTab1}Clean export workbook to match TrackGeometryReport template");
 
-                // Start at 1 to skip element 0 (reference worksheet)
+                // Start at 1 to skip element 0 (reference Worksheet)
                 for (int j = 1; j < strTrackWorksheets.Count; j++)
                 {
                     string strTrackWorksheet = strTrackWorksheets[j].Trim();
@@ -945,5 +1193,132 @@ ThatsAllFolks:
 
 
         }
+
+
+
+        #region Config helpers
+        static string CleanConfig(string s) => (s ?? string.Empty).Trim().Trim('\'', '"');
+
+        static string GetRequired(NameValueCollection cfg, string key)
+        {
+            string v = CleanConfig(cfg[key]);
+            if (v.Length == 0)
+                throw new ConfigurationErrorsException($"\nMissing/empty config key '{key}'.");
+            return v;
+        }
+
+        static int GetRequiredInt(NameValueCollection cfg, string key, int minValueInclusive = int.MinValue, int maxValueInclusive = int.MaxValue)
+        {
+            string s = GetRequired(cfg, key);
+            if (!int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out int v))
+                throw new ConfigurationErrorsException($"\nConfig key '{key}' is invalid (expected integer). Value='{s}'.");
+            if (v < minValueInclusive || v > maxValueInclusive)
+                throw new ConfigurationErrorsException($"\nConfig key '{key}' is out of range. Value={v}.");
+            return v;
+        }
+
+        static bool IsYes(string s) => string.Equals(CleanConfig(s), "Yes", StringComparison.OrdinalIgnoreCase);
+        #endregion
+
+
+        #region Internal helpers
+        internal static class ConfigParsing
+        {
+            public static bool GetBoolYesNo(System.Collections.Specialized.NameValueCollection appSettings, string key)
+            {
+                #region Read raw setting
+                string? raw = appSettings[key];
+                #endregion
+
+                #region Validate missing value
+                if (raw is null)
+                {
+                    string message = $"\nMissing required appSetting: '{key}'.";
+                    ConfigurationErrorsException exception = new(message);
+
+                    Console.Error.WriteLine(exception.Message);
+
+                    throw exception;
+                }
+                #endregion
+
+                #region Normalise value
+                string value = raw.Trim();
+                #endregion
+
+                #region Validate Yes/No
+                if (value.Equals("Yes", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                if (value.Equals("No", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+                #endregion
+
+                #region Throw invalid value error
+                {
+                    string message = $"Invalid value for appSetting '{key}': '{raw}'. Expected 'Yes' or 'No'.";
+                    ConfigurationErrorsException exception = new(message);
+
+                    Console.Error.WriteLine(exception.Message);
+
+                    throw exception;
+                }
+                #endregion
+            }
+
+            public static string GetRequiredString(System.Collections.Specialized.NameValueCollection appSettings, string key)
+            {
+                #region Read raw setting
+                string? raw = appSettings[key];
+                #endregion
+
+                #region Validate required value
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    string message = $"\nMissing or empty required appSetting: '{key}'.";
+                    Console.Error.WriteLine(message);
+                    throw new ConfigurationErrorsException(message: message);
+                }
+                #endregion
+
+                #region Return normalised value
+                return raw.Trim();
+                #endregion
+            }
+
+            public static int GetRequiredInt(System.Collections.Specialized.NameValueCollection appSettings, string key)
+            {
+                string raw = GetRequiredString(appSettings, key);
+                if (!int.TryParse(raw, out int value))
+                    throw new ConfigurationErrorsException($"\nInvalid integer for appSetting '{key}': '{raw}'.");
+                return value;
+            }
+
+            public static double GetRequiredDouble(System.Collections.Specialized.NameValueCollection appSettings, string key)
+            {
+                string raw = GetRequiredString(appSettings, key);
+                if (!double.TryParse(
+                        raw,
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out double value))
+                {
+                    throw new ConfigurationErrorsException(
+                        $"\nInvalid double for appSetting '{key}': '{raw}'. Use '.' as decimal separator.");
+                }
+                return value;
+            }
+        }
+
+
+        #endregion
+
+
+
+
     }
 }
