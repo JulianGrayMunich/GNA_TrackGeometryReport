@@ -1,19 +1,14 @@
-﻿using System.Collections.Specialized;
-using System.ComponentModel;
+﻿using System;
+using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Configuration;
-using System.Data;
-using System.Data.Common;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Reflection;
-using System.Reflection.Metadata.Ecma335;
-using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
+using System.Text;
 
 using databaseAPI;
-
-using EASendMail;
 
 using GNA_CommercialLicenseValidator;
 
@@ -25,31 +20,49 @@ using GNAspreadsheettools;
 
 using GNAsurveytools;
 
-using Microsoft.Data.SqlClient;
-
-using OfficeOpenXml;
-
 using T4Dlibrary;
 
-using Twilio.Rest.Api.V2010.Account;
-using Twilio.Rest.Sync.V1.Service.SyncStream;
-using Twilio.TwiML.Messaging;
-using Twilio.TwiML.Voice;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
-using static T4Dlibrary.T4Dapi;
-
-
-
-
-
-
+//using System.ComponentModel;
+//using System.Data;
+//using System.Data.Common;
+//using System.Diagnostics;
+//using System.IO;
+//using System.Linq;
+//using System.Reflection;
+//using System.Reflection.Metadata.Ecma335;
+//using EASendMail;
+//using Microsoft.Data.SqlClient;
+//using OfficeOpenXml;
+//using Twilio.Rest.Api.V2010.Account;
+//using Twilio.Rest.Sync.V1.Service.SyncStream;
+//using Twilio.TwiML.Messaging;
+//using Twilio.TwiML.Voice;
+//using static T4Dlibrary.T4Dapi;
 
 namespace TrackGeometryReport
 {
     class Program
     {
+        #region Constants
+
+        private const string EmailTransmissionSuccess =
+            "Email sent successfully";
+
+        private const string SystemActivityLogFileName =
+            "SystemActivityLog.txt";
+
+        private const string TwilioCredentialsFileName =
+            "TwilioCredentials.bin";
+
+        #endregion
+
         static void Main()
         {
+            string strFatalCrashLogFullPath = Path.Combine(
+                path1: AppContext.BaseDirectory,
+                path2: "fatal_crash.log");
             // This is a generic and expanded version of the SPN010 track geometry reports
             // additional featureds are added to make it more user friendly.
             // 20260412
@@ -63,6 +76,7 @@ namespace TrackGeometryReport
 #pragma warning disable CS0162
 #pragma warning disable CS8600
 #pragma warning disable CS8601
+#pragma warning disable CS8602
 #pragma warning disable CS8604
 
 
@@ -80,7 +94,7 @@ namespace TrackGeometryReport
 
                 string strTab1 = "     ";
                 string strTab2 = "        ";
-                string strTab3 = "           ";
+
 
                 Console.OutputEncoding = System.Text.Encoding.Unicode;
                 Console.Out.Flush();
@@ -151,25 +165,40 @@ namespace TrackGeometryReport
                 string? strSurveyWorksheet = config["SurveyWorksheet"]?.Trim();
                 string? strTrackGeometryWorksheet = config["TrackGeometryWorksheet"]?.Trim();
                 string? strCalibrationWorksheet = config["CalibrationWorksheet"]?.Trim();
+                string? strAlarmsWorksheet = config["AlarmsWorksheet"]?.Trim();
+                string? strCopingWorksheet = config["CopingWorksheet"]?.Trim();
                 string? strHistoricDhWorksheet = config["HistoricDhWorksheet"]?.Trim();
                 string? strHistoricTopWorksheet = config["HistoricTopWorksheet"]?.Trim();
                 string? strHistoricdHWorksheet = config["HistoricdHWorksheet"]?.Trim();
                 string? strHistoricTwistWorksheet = config["HistoricTwistWorksheet"]?.Trim();
                 string? strHistoricLongTwistWorksheet = config["HistoricLongTwistWorksheet"]?.Trim();
-                string? strAlarmsWorksheet = config["AlarmsWorksheet"]?.Trim();
-                string? strHistoricCantWorksheet = config["HistoricCantWorksheet"]?.Trim(); 
-                string? strLatestTiltWorksheet = config["LatestTiltWorksheet"]?.Trim();
-                string? strHistoricTiltWorksheet = config["HistoricTiltWorksheet"]?.Trim();
-                string? strHistoricDeltaTiltWorksheet = config["HistoricDeltaTiltWorksheet"]?.Trim();
-                string? strHistoricDeltaTiltAWorksheet = config["HistoricDeltaTiltAWorksheet"]?.Trim();
-                string? strHistoricDeltaTiltBWorksheet = config["HistoricDeltaTiltBWorksheet"]?.Trim();
-                string? strHistoricDeltaTiltCWorksheet = config["HistoricDeltaTiltCWorksheet"]?.Trim();
-                string? strLatestExtensometerWorksheet = config["LatestExtensometerWorksheet"]?.Trim();
-                string? strHistoricExtensometerWorksheet = config["HistoricExtensometerWorksheet"]?.Trim();
-                string? strHistoricDeltaExtensometerWorksheet = config["HistoricDeltaExtensometerWorksheet"]?.Trim();
+                string? strHistoricCantWorksheet = config["HistoricCantWorksheet"]?.Trim();
+                string? strHistoricCopingWorksheet = config["HistoricCopingWorksheet"]?.Trim();
+                string? strHistoricSlewWorksheet = config["HistoricSlewWorksheet"]?.Trim();
+
                 string? strReportSpec = config["ReportSpec"]?.Trim();
                 string? strWorkbookPassword = config["WorkbookPassword"]?.Trim();
 
+                #endregion
+
+                #region Check whether workbook is open
+
+                string strMasterWorkbookFullPath = Path.Combine(strExcelPath, strExcelFile);
+
+
+                if (gnaSpreadsheetAPI.IsWorkbookOpen(
+                    strWorkbookFullPath: strMasterWorkbookFullPath))
+                {
+                    string message =
+                        $"\n{strTab1}The Excel workbook is currently open or locked:\n " +
+                        $"'{strMasterWorkbookFullPath}'.";
+                    Console.WriteLine($"{message}\nExecution stopped...\n");
+                    Environment.Exit(exitCode: 0);
+                }
+                else
+                {
+                    Console.WriteLine($"{strTab1}{strMasterWorkbookFullPath} ready");
+                }
                 #endregion
 
                 #region Config variables
@@ -192,10 +221,20 @@ namespace TrackGeometryReport
                 string strBlockSizeHrs = ConfigParsing.GetRequiredString(config, "BlockSizeHrs");
 
                 string strStopAtAlarmMessage = config["stopAtAlarmMessage"];
-                string strAlarmVersion = config["AlarmVersion"];
+
+                bool alarmVersion = ConfigParsing.GetBoolYesNo(
+                    appSettings: config,
+                    key: "AlarmVersion");
+
+                bool recordHistoricData = ConfigParsing.GetBoolYesNo(
+                    appSettings: config,
+                    key: "recordHistoricData");
+
+                string strAlarmVersion = alarmVersion ? "Yes" : "No";
+                string strRecordHistoricData = recordHistoricData ? "Yes" : "No";
+
                 string strDeleteMissingValues = config["DeleteMissingValues"];
                 string strLatestValueOnly = config["LatestValueOnly"];
-                string strRecordHistoricData = config["recordHistoricData"];
                 #endregion
 
                 #region Report variables
@@ -205,18 +244,9 @@ namespace TrackGeometryReport
                 string strIncludeHistoricSettlement = config["includeHistoricSettlement"];
                 string strIncludeHistoricTop = config["includeHistoricTop"];
                 string strIncludeMissingTargets = config["includeMissingTargets"];
-
-
-                strReportType = ConfigParsing.GetRequiredString(config, "ReportType");
-
-
-
-
-
                 #endregion
 
                 #region System variables
-                string strMasterWorkbookFullPath = strExcelPath + strExcelFile;
                 Console.WriteLine($"{strTab1}Done");
                 #endregion
 
@@ -224,20 +254,35 @@ namespace TrackGeometryReport
 
                 Console.WriteLine($"{strTab1}General variables");
 
+                string strReferenceLineTerminalsEaNaEbNb = CleanConfig(config["ReferenceLineTerminalsEaNaEbNb"]);
+
                 string strComputeMeanDeltas = CleanConfig(config["computeMean"]);
                 if (strComputeMeanDeltas.Length == 0) strComputeMeanDeltas = "No";
 
                 string strUpdateSensorList = CleanConfig(config["updateSensorList"]);
                 if (strUpdateSensorList.Length == 0) strUpdateSensorList = "No";
 
-                string strSystemLogsFolder = CleanConfig(config["SystemStatusFolder"]);
+                string strIncludeCoping = CleanConfig(config["includeCoping"]);
+                if (strIncludeCoping.Length == 0) strIncludeCoping = "No";
+
+                string strIssueDailyAlarmStatusSummary = CleanConfig(config["IssueDailyAlarmStatusSummary"]);
+                if (strIssueDailyAlarmStatusSummary.Length == 0) strIssueDailyAlarmStatusSummary = "No";
+
+                string strSystemLogsFolder = CleanConfig(config["SystemLogsFolder"]);
                 if (strSystemLogsFolder.Length == 0) strSystemLogsFolder = @"C:\__SystemLogs\";
 
-                string strAlarmfolder = CleanConfig(config["SystemAlarmFolder"]);
-                if (strAlarmfolder.Length == 0) strAlarmfolder = @"C:\__SystemAlarms\";
+                string strSystemAlarmfolder = CleanConfig(config["SystemAlarmFolder"]);
+                if (strSystemAlarmfolder.Length == 0) strSystemAlarmfolder = @"C:\__SystemAlarms\";
 
-                Directory.CreateDirectory(strSystemLogsFolder);
-                Directory.CreateDirectory(strAlarmfolder);
+                string strSystemCredentialsFolder = CleanConfig(config["SystemCredentialsFolder"]);
+                if (strSystemCredentialsFolder.Length == 0) strSystemCredentialsFolder = @"C:\__SystemCredentials\";
+
+                Directory.CreateDirectory(path: strSystemLogsFolder);
+                Directory.CreateDirectory(path: strSystemAlarmfolder);
+
+                strFatalCrashLogFullPath = Path.Combine(
+                    path1: strSystemLogsFolder,
+                    path2: "fatal_crash.log");
 
                 var cs = ConfigurationManager.ConnectionStrings["DBconnectionString"];
                 if (cs == null || string.IsNullOrWhiteSpace(cs.ConnectionString))
@@ -258,9 +303,21 @@ namespace TrackGeometryReport
                     throw new FileNotFoundException(message, strExcelWorkbookFullPath);
                 }
 
-                string? strSPN010alarms = config["AlarmNotifications"];
+                //string? strSPN010alarms = config["AlarmNotifications"];
 
                 double dblTimeZoneOffset = gnaDBAPI.getProjectTimeZoneOffset(strDBconnection, strProjectTitle);
+
+                #endregion
+
+                #region Time Zone Details
+
+                string strTimeZoneID =
+                    ConfigParsing.GetRequiredString(
+                        appSettings: config,
+                        key: "TimeZoneId");
+
+                _ = TimeZoneInfo.FindSystemTimeZoneById(
+                    id: strTimeZoneID);
 
                 #endregion
 
@@ -288,25 +345,164 @@ namespace TrackGeometryReport
                     strEmailTransmissionDays: strEmailTransmissionDays,
                     strEmailTransmissionTime: strEmailTransmissionTime,
                     dblTimeZoneOffset: dblTimeZoneOffset,
-                    strSystemLogsFolder: strSystemLogsFolder);
+                    strSystemLogsFolder: strSystemLogsFolder,
+                    strTimeZoneId: strTimeZoneID);
+
+                #endregion
+
+                #region Email transmission settings
+                bool blnShouldSend = gnaT.ShouldTransmitEmail(
+                    emailCredentials: emailCreds);
+
+                if (blnShouldSend)
+                {
+                    Console.WriteLine(
+                        $"{strTab2}Scheduled email will be sent.");
+                }
+                else
+                {
+                    Console.WriteLine(
+                        $"{strTab2}Scheduled email is not due. " +
+                        $"Alarm notifications remain independently enabled.");
+                }
                 #endregion
 
                 #region SMS settings
                 Console.WriteLine($"{strTab1}SMS settings");
 
-                string? strSMSTitle = config["SMSTitle"]?.Trim();
-                string strMobileList = "";
+                string strSMSTitle = ConfigParsing.GetRequiredString(
+                    appSettings: config,
+                    key: "SMSTitle");
 
-                List<string> smsMobile = new();
-                foreach (string key in config.AllKeys.Where(k =>
-                             !string.IsNullOrWhiteSpace(k) &&
-                             k.StartsWith("RecipientPhone", StringComparison.OrdinalIgnoreCase)))
+                List<(
+                    int Index,
+                    string ConfigurationKey,
+                    string PhoneNumber,
+                    SmsNotificationGroup NotificationGroup)>
+                    configuredSmsRecipients = new();
+
+                string[] smsConfigurationKeys =
+                    config.AllKeys ?? Array.Empty<string>();
+
+                for (int iKeyIndex = 0;
+                    iKeyIndex < smsConfigurationKeys.Length;
+                    iKeyIndex++)
                 {
-                    string phoneNumber = gnaT.NormalizePhoneNumber(config[key], key);
-                    smsMobile.Add(phoneNumber);
+                    string strConfigurationKey =
+                        smsConfigurationKeys[iKeyIndex] ?? string.Empty;
 
-                    if (strMobileList.Length > 0) strMobileList += ",";
-                    strMobileList += phoneNumber;
+                    string strRequiredPrefix;
+                    SmsNotificationGroup notificationGroup;
+
+                    if (strConfigurationKey.StartsWith(
+                        value: "RecipientPhone",
+                        comparisonType:
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        strRequiredPrefix = "RecipientPhone";
+                        notificationGroup =
+                            SmsNotificationGroup.All;
+                    }
+                    else if (strConfigurationKey.StartsWith(
+                        value: "RedPhone",
+                        comparisonType:
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        strRequiredPrefix = "RedPhone";
+                        notificationGroup =
+                            SmsNotificationGroup.Red;
+                    }
+                    else
+                    {
+                        continue;
+                    }
+
+                    string strNumericSuffix = strConfigurationKey
+                        .Substring(
+                            startIndex: strRequiredPrefix.Length)
+                        .Trim();
+
+                    bool blnSuffixIsValid = int.TryParse(
+                        s: strNumericSuffix,
+                        style: NumberStyles.None,
+                        provider: CultureInfo.InvariantCulture,
+                        result: out int iRecipientIndex) &&
+                        iRecipientIndex > 0;
+
+                    if (!blnSuffixIsValid)
+                    {
+                        throw new ConfigurationErrorsException(
+                            message:
+                                $"Invalid SMS recipient key " +
+                                $"'{strConfigurationKey}'. Expected " +
+                                $"'{strRequiredPrefix}' followed by a " +
+                                "positive integer.");
+                    }
+
+                    string strPhoneNumber = gnaT.NormalizePhoneNumber(
+                        rawValue: config[strConfigurationKey],
+                        keyName: strConfigurationKey);
+
+                    configuredSmsRecipients.Add(
+                        item:
+                            (
+                                Index: iRecipientIndex,
+                                ConfigurationKey: strConfigurationKey,
+                                PhoneNumber: strPhoneNumber,
+                                NotificationGroup: notificationGroup));
+                }
+
+                configuredSmsRecipients = configuredSmsRecipients
+                    .OrderBy(
+                        keySelector: recipient =>
+                            recipient.NotificationGroup)
+                    .ThenBy(
+                        keySelector: recipient =>
+                            recipient.Index)
+                    .ThenBy(
+                        keySelector: recipient =>
+                            recipient.ConfigurationKey,
+                        comparer: StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                Dictionary<string, string> configurationKeyByPhoneNumber =
+                    new(comparer: StringComparer.Ordinal);
+
+                List<SmsRecipient> smsRecipients = new();
+
+                for (int iRecipientIndex = 0;
+                    iRecipientIndex < configuredSmsRecipients.Count;
+                    iRecipientIndex++)
+                {
+                    var configuredRecipient =
+                        configuredSmsRecipients[iRecipientIndex];
+
+                    if (configurationKeyByPhoneNumber.TryGetValue(
+                        key: configuredRecipient.PhoneNumber,
+                        value: out string? strExistingConfigurationKey))
+                    {
+                        throw new ConfigurationErrorsException(
+                            message:
+                                $"SMS telephone number " +
+                                $"'{configuredRecipient.PhoneNumber}' is " +
+                                $"configured more than once: " +
+                                $"'{strExistingConfigurationKey}' and " +
+                                $"'{configuredRecipient.ConfigurationKey}'.");
+                    }
+
+                    configurationKeyByPhoneNumber.Add(
+                        key: configuredRecipient.PhoneNumber,
+                        value: configuredRecipient.ConfigurationKey);
+
+                    smsRecipients.Add(
+                        item:
+                            new SmsRecipient(
+                                configurationKey:
+                                    configuredRecipient.ConfigurationKey,
+                                phoneNumber:
+                                    configuredRecipient.PhoneNumber,
+                                notificationGroup:
+                                    configuredRecipient.NotificationGroup));
                 }
                 #endregion
 
@@ -330,10 +526,9 @@ namespace TrackGeometryReport
                 string strTimeBlockEndUTC = "";
                 string strEmailTime = "";
                 string strDateTime = "";
-                string logFileMessage = "";
+
 
                 // ---- Working strings and file paths ----
-                string strTempString = "";
                 string strMasterFile = "";
                 string strWorkingFile = "";
                 string strExportFile = "";
@@ -346,7 +541,37 @@ namespace TrackGeometryReport
                 Console.WriteLine($"{strTab1}Assigned");
                 #endregion
 
-                #region populate the RuntimeEnvironment class
+                #region Alarm and Historic Data Configuration
+
+                // AlarmVersion and recordHistoricData are independent configuration
+                // controls. Neither value is modified by the email schedule.
+
+                bool blnWriteHistoricData =
+                    t4dapi.ShouldWriteHistoricData(
+                        alarmVersion: alarmVersion,
+                        blnShouldSend: blnShouldSend,
+                        strTimeBlockType: strTimeBlockType);
+
+                if (strRecordHistoricData == "No")
+                {
+                    blnWriteHistoricData = false;
+                }
+
+                if ((strRecordHistoricData == "No") && (strTimeBlockType == "Manual"))
+                {
+                    blnWriteHistoricData = false;
+                }
+
+                Console.WriteLine(
+                    $"{strTab1}AlarmVersion: {strAlarmVersion}");
+                Console.WriteLine(
+                    $"{strTab1}  Time Block: {strTimeBlockType}");
+                Console.WriteLine(
+                    $"{strTab1}Record historic data: {strRecordHistoricData}");
+
+                #endregion
+
+                #region Populate the RuntimeEnvironment class
 
                 gnaDataClasses.RuntimeEnvironment runtimeEnvironment = new()
                 {
@@ -355,6 +580,13 @@ namespace TrackGeometryReport
                     ProjectTitle = strProjectTitle,
                     ReportType = strReportType,
 
+                    // ---- Time Zone ----
+                    TimeZoneID = strTimeZoneID,
+
+                    // --- System folders ---
+                    SystemLogsFolder = strSystemLogsFolder,
+                    SystemAlarmFolder = strSystemAlarmfolder,
+                    SystemCredentialsFolder = strSystemCredentialsFolder,
 
                     // ---- Workbook ----
                     ExcelPath = strExcelPath,
@@ -363,16 +595,18 @@ namespace TrackGeometryReport
                     // ---- Permissions ----
                     RecordHistoricData = strRecordHistoricData,
 
-
                     // ---- Worksheets ----
                     ReferenceWorksheet = strReferenceWorksheet,
                     SurveyWorksheet = strSurveyWorksheet,
+                    CopingWorksheet = strCopingWorksheet,
                     TrackGeometryWorksheet = strTrackGeometryWorksheet,
                     HistoricCantWorksheet = strHistoricCantWorksheet,
                     HistoricTopWorksheet = strHistoricTopWorksheet,
                     HistoricdHWorksheet = strHistoricdHWorksheet,
                     HistoricTwistWorksheet = strHistoricTwistWorksheet,
-                    HistoricLongTwistWorksheet = strHistoricLongTwistWorksheet, 
+                    HistoricLongTwistWorksheet = strHistoricLongTwistWorksheet,
+                    HistoricCopingWorksheet = strHistoricCopingWorksheet,
+                    HistoricSlewWorksheet = strHistoricSlewWorksheet,
 
                     // ---- Row/Col configuration ----
                     FirstDataRow = iFirstDataRow,
@@ -384,9 +618,9 @@ namespace TrackGeometryReport
                 #endregion
 
                 #region Clean exit
-                void FinishAndExit()
+                void FinishAndExit(string strReportType)
                 {
-                    Console.WriteLine("\nSensor report completed...\n\n");
+                    Console.WriteLine($"\n{strReportType} report completed...\n\n");
                     gnaT.freezeScreen(strFreezeScreen);
                 }
                 #endregion
@@ -411,14 +645,28 @@ namespace TrackGeometryReport
                     gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strReferenceWorksheet);
                     gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strSurveyWorksheet);
                     gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strTrackGeometryWorksheet);
-                    gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricCantWorksheet);
-                    gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricTwistWorksheet);
-                    gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricLongTwistWorksheet);
-                    gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricTwistWorksheet);
-                    gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricLongTwistWorksheet);
-                    gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricTopWorksheet);
-                    gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricdHWorksheet);
                     gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strAlarmsWorksheet);
+
+                    if (blnWriteHistoricData)
+                    {
+                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricCantWorksheet);
+                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricTwistWorksheet);
+                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricLongTwistWorksheet);
+                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricTwistWorksheet);
+                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricLongTwistWorksheet);
+                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricTopWorksheet);
+                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricdHWorksheet);
+                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricSlewWorksheet);
+                    }
+
+                    if (strIncludeCoping.Equals(
+                        value: "Yes",
+                        comparisonType: StringComparison.OrdinalIgnoreCase))
+                    {
+                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strCopingWorksheet);
+                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricCopingWorksheet);
+                    }
+
                     Console.WriteLine($"{strTab1}Done");
                 }
                 else
@@ -471,13 +719,12 @@ namespace TrackGeometryReport
                         break;
 
                     default:
-                        Console.WriteLine("\nError in Timeblock Type");
-                        Console.WriteLine("Time block type: " + strTimeBlockType);
-                        Console.WriteLine("Must be Manual, Schedule or Historic");
-                        Console.WriteLine("\nPress key to exit...");
-                        Console.ReadKey();
-                        Environment.Exit(1);
-                        break;
+                        throw new ArgumentException(
+                            message:
+                                $"Unknown TimeBlockType " +
+                                $"'{strTimeBlockType}'. Expected Manual, " +
+                                "Schedule, or Historic.",
+                            paramName: nameof(strTimeBlockType));
                 }
 
                 string strTimeStampLocal;
@@ -486,14 +733,14 @@ namespace TrackGeometryReport
                     string strTemp = strEmailTime.Replace(":", "").Replace("-", "").Replace(" ", "_");
                     strExportFile = strExcelPath + strContractTitle + "_" + strReportType + "_" + strTemp + ".xlsx";
                     strWorkingFile = strExportFile;
-                    strMasterFile = strExcelPath + strExcelFile;
+                    strMasterFile = strMasterWorkbookFullPath;
                     strTimeStampLocal = strTemp;
                 }
                 else
                 {
                     strExportFile = strExcelPath + strContractTitle + "_" + strReportType + "_" + "DateTime" + ".xlsx";
                     strWorkingFile = strExportFile;
-                    strMasterFile = strExcelPath + strExcelFile;
+                    strMasterFile = strMasterWorkbookFullPath;
                     strTimeStampLocal = strDateTime;
                 }
 
@@ -557,7 +804,7 @@ namespace TrackGeometryReport
                         $"GNA_TrackGeometryReport | Run start | Build={BuildInfo.BuildDateString()} | Project='{strProjectTitle}' | Contract='{strContractTitle}' | " +
                         $"Mode={(prepareReferenceData ? "prepareReferenceData" : "Export")} | TimeBlockType='{strTimeBlockType}' | " +
                         $"ManualStart='{strManualBlockStart}' | ManualEnd='{strManualBlockEnd}' | BlockSizeHrs='{strBlockSizeHrs}' | " +
-                        $"computeMean='{strcomputeMeans}' | " +
+                        $"computeMean='{strcomputeMeans}' | " + $"include Coping='{strIncludeCoping}' | " +
                         $"Workbook='{strExcelWorkbookFullPath}' | SurveyWS='{strSurveyWorksheet}' | FirstRow={iFirstDataRow}";
                     gnaT.updateSystemLogFile(strSystemLogsFolder, runHeader);
                 }
@@ -659,6 +906,13 @@ namespace TrackGeometryReport
                     };
                     #endregion
 
+
+    
+                    if ((strRecordHistoricData == "No") && (strTimeBlockType == "Manual"))
+                    {
+                        blnWriteHistoricData = false;
+                    }
+
                     foreach (var block in subBlocks)
                     {
 
@@ -671,8 +925,8 @@ namespace TrackGeometryReport
                         string strBlockStart = gnaT.NormalizeTimeStampToString(strTimeBlockStartUTC);
                         string strBlockEnd = gnaT.NormalizeTimeStampToString(strTimeBlockEndUTC);
                         strTimeStamp = strTimeBlockEndLocal + "\n(local)";
-                        strReportTime = t4dapi.prepareReportTime(strTimeBlockEndLocal);
-                        strReportTime += timeBlockSuffix;
+                        strReportTime = t4dapi.prepareReportTime(
+                            strTimeBlockEndLocal);
                         Console.WriteLine($"{strTab2}{strTimeBlockStartLocal} (local)");
                         Console.WriteLine($"{strTab2}{strTimeBlockEndLocal} (local)");
                         #endregion
@@ -687,10 +941,14 @@ namespace TrackGeometryReport
                         #endregion
 
                         #region Build export file name
-                        strExportFile = strExcelPath + strContractTitle + "_" + strReportType + "_" + strReportTime + timeBlockSuffix + ".xlsx";
+                        strExportFile = Path.Combine(
+                            path1: strExcelPath,
+                            path2:
+                                $"{strContractTitle}_{strReportType}_" +
+                                $"{strReportTime}{timeBlockSuffix}.xlsx");
                         #endregion
 
-                        #region Preparing Track Geometry data
+                        #region Read Deltas
                         // read deltas from the db for the current time block
                         List<Points> currentDeltas = t4dapi.GetAllPointsMeanDeltas(
                             dbConnection: strDBconnection,
@@ -698,16 +956,21 @@ namespace TrackGeometryReport
                             timeBlockStartUTC: strTimeBlockStartUTC,
                             timeBlockEndUTC: strTimeBlockEndUTC,
                             iTimeIntervalHours: null);
+                        #endregion
 
+                        #region Remove Outliers
                         currentDeltas = t4dapi.removeOutliers(
                             pointsList: currentDeltas,
-                            checkDistance: 0.3);
+                            checkDistance: 100);
 
                         prismList = t4dapi.combinePointsLists(parentList: prismList, childList: currentDeltas);
 
                         prismList = t4dapi.removeOutliers(
                             pointsList: prismList,
-                            checkDistance: 0.3);
+                            checkDistance: 100);
+
+                        prismList = t4dapi.checkForMissingReadings(
+                            pointList: prismList);
                         #endregion
 
                         #region Writing geometry to workbook
@@ -751,69 +1014,420 @@ namespace TrackGeometryReport
                             trackPairList: trackPairList,
                             prismList: prismList,
                             strTimeBlockStartUTC: strTimeBlockStartUTC,
-                            strTimeBlockEndUTC: strTimeBlockEndUTC);
+                            strTimeBlockEndUTC: strTimeBlockEndUTC,
+                            alarmVersion: alarmVersion,
+                            blnShouldSend: blnShouldSend,
+                            strTimeBlockType: strTimeBlockType,
+                            strRecordHistoricData: strRecordHistoricData);
 
                         #endregion
 
-                        //Verified: prismList is OK
+                        #region Compute slew
 
+                        Console.WriteLine(
+                            $"{strTab1}Compute track slew");
 
+                        bool blnTrackSlewSuccess =
+                            gnaSpreadsheetAPI.computeTrackSlew(
+                                env: runtimeEnvironment,
+                                prismList: prismList,
+                                trackPairList: trackPairList,
+                                strTimeBlockEndUTC: strTimeBlockEndUTC);
 
-                        #region Create export file
-                        Console.WriteLine($"{strTab1}Create export file");
-                        strExportFile = strExcelPath + strContractTitle + "_" + strReportType + "_" + strReportTime + ".xlsx";
-                        if (string.IsNullOrWhiteSpace(strMasterWorkbookFullPath))
-                            throw new ArgumentException("strMasterWorkbookFullPath is required.", nameof(strMasterWorkbookFullPath));
+                        Console.WriteLine(
+                            $"{strTab2}Success: {blnTrackSlewSuccess}");
 
-                        if (string.IsNullOrWhiteSpace(strExportFile))
-                            throw new ArgumentException("strExportFile is required.", nameof(strExportFile));
+                        bool blnWriteHistoricSlew =
+                            t4dapi.ShouldWriteHistoricData(
+                                alarmVersion: alarmVersion,
+                                blnShouldSend: blnShouldSend,
+                                strTimeBlockType: strTimeBlockType);
 
-                        if (!File.Exists(path: strMasterWorkbookFullPath))
-                            throw new FileNotFoundException("Master workbook not found.", strMasterWorkbookFullPath);
-
-                        try
+                        if(strTimeBlockType== "Manual" && strRecordHistoricData == "No")
                         {
-                            File.Copy(
-                                sourceFileName: strMasterWorkbookFullPath,
-                                destFileName: strExportFile,
-                                overwrite: true);
-                            Console.WriteLine($"{strTab2}{strExportFile}");
+                            blnWriteHistoricSlew = false;
+                            blnWriteHistoricData = false;
                         }
-                        catch (Exception ex)
+
+
+                        if (blnWriteHistoricSlew)
                         {
-                            string strMessage1 =
-                                $"\nFailed to copy master workbook from '{strMasterWorkbookFullPath}' to '{strExportFile}'. {ex.Message}";
-                            Console.WriteLine(strMessage1);
-                            throw new InvalidOperationException(strMessage1, ex);
+                            #region Historic Slew Worksheet Header
+
+                            string strHeaderTimeFormatted = DateTime.ParseExact(
+                                s: strTimeBlockEndUTC,
+                                format: "yyyy-MM-dd HH:mm:ss",
+                                provider: CultureInfo.InvariantCulture)
+                            .ToString(
+                                format: "yyyy-MM-dd\nHH'h'mm",
+                                provider: CultureInfo.InvariantCulture);
+
+                            string strHistoricSlewHeaderTitle =
+                                "Slew\n(mm)\n" +
+                                strHeaderTimeFormatted;
+
+                            #endregion
+
+                            #region Write Historic Slew
+
+                            string strHistoricSlewResult =
+                                t4dapi.WriteHistoricTrackPairGeometrySeries(
+                                    env: runtimeEnvironment,
+                                    trackPairList: trackPairList,
+                                    worksheetName:
+                                        runtimeEnvironment.HistoricSlewWorksheet,
+                                    headerTitle: strHistoricSlewHeaderTitle,
+                                    valueSelector: pair =>
+                                        pair.Slew.HasValue
+                                            ? pair.Slew.Value * 1000.0
+                                            : null);
+
+                            Console.WriteLine(
+                                $"{strTab2}{strHistoricSlewResult}\n" +
+                                $"{strTab2}Done");
+
+                            #endregion
                         }
 
                         #endregion
 
-                        #region Prepare export file for distribution
-                        Console.WriteLine($"{strTab1}Prepare the export workbook");
-                        Console.WriteLine($"{strTab2}Hide {strReferenceWorksheet}");
-                        gnaSpreadsheetAPI.hideWorksheet(strExportFile, strReferenceWorksheet);
-                        Console.WriteLine($"{strTab2}Hide {strAlarmsWorksheet}");
-                        gnaSpreadsheetAPI.hideWorksheet(strExportFile, strAlarmsWorksheet);
-                        Console.WriteLine($"{strTab2}Hide {strSurveyWorksheet}");
-                        gnaSpreadsheetAPI.hideWorksheet(strExportFile, strSurveyWorksheet);
-                        //Console.WriteLine($"{strTab2}Freeze {strExportFile}");
-                        //gnaSpreadsheetAPI.freezeWorkbook(strExportFile, strWorkbookPassword);
-                        Console.WriteLine($"{strTab1}Done");
+                        #region Coping displacement
+
+                        Console.WriteLine(
+                            $"{strTab1}Coping displacement");
+
+
+                        if (strTimeBlockType == "Manual" && strRecordHistoricData == "No")
+                        {
+                            blnWriteHistoricData = false;
+                        }
+
+
+                        if (strIncludeCoping.Equals(
+                            value: "Yes",
+                            comparisonType: StringComparison.OrdinalIgnoreCase))
+                        {
+                            gnaSpreadsheetAPI.copingDisplacement(
+                                runtimeEnvironment: runtimeEnvironment,
+                                strReferenceLineTerminalsEaNaEbNb:
+                                    strReferenceLineTerminalsEaNaEbNb,
+                                strTimeBlockEndUTC: strTimeBlockEndUTC,
+                                blnWriteHistoricData: blnWriteHistoricData );
+
+                            Console.WriteLine(
+                                $"{strTab2}Done");
+                        }
+                        else
+                        {
+                            Console.WriteLine(
+                                $"{strTab2}No coping");
+                        }
+
                         #endregion
 
-                #endregion
+                        #region Check Alarm State
 
-                #region Trigger levels
+                        Console.WriteLine(
+                            $"{headingNo++}. Checking alarm state");
+
+                        string strAlarmMessage =
+                            gnaSpreadsheetAPI.SPN010AlarmState(
+                                strMasterFile,
+                                strAlarmsWorksheet,
+                                iFirstTrackRow,
+                                strIncludeMissingTargets);
+
+                        AlarmEvaluationResult alarmEvaluation =
+                            t4dapi.EvaluateAlarmState(
+                                strAlarmMessage: strAlarmMessage,
+                                env: runtimeEnvironment);
+
+                        string strAlarmResponse =
+                            alarmEvaluation.ResponseText;
+
+                        Console.WriteLine(
+                            $"{strTab1}{strAlarmResponse}");
+
+                        Console.WriteLine(
+                            $"{strTab1}Alarm severity: " +
+                            $"{alarmEvaluation.PreviousSeverity} -> " +
+                            $"{alarmEvaluation.CurrentSeverity}");
+
+                        Console.WriteLine(
+                            $"{strTab1}Red transition: " +
+                            $"{alarmEvaluation.RedTransition}");
+                        #endregion
+
+                        #region Pause at Alarm Message
+
+                        if (strStopAtAlarmMessage == "Yes")
+                        {
+                            string strPauseMessage =
+                                "Time Window: " +
+                                strBlockSizeHrs +
+                                " hrs\nLatest value only: " +
+                                strLatestValueOnly +
+                                "\n\n" +
+                                strAlarmMessage;
+
+                            gnaT.pauseExecution(
+                                strStopAtAlarmMessage,
+                                strPauseMessage);
+                        }
+                        #endregion
+
+                        #region Issue Daily Alarm Status Summary
+
+                        string strDailyAlarmSummaryResponse =
+                            t4dapi.IssueDailyAlarmStatusSummary(
+                                strIssueDailyAlarmStatusSummary:
+                                    strIssueDailyAlarmStatusSummary,
+                                strTimeBlockType:
+                                    strTimeBlockType,
+                                emailCreds:
+                                    emailCreds,
+                                smsRecipients:
+                                    smsRecipients,
+                                env:
+                                    runtimeEnvironment);
+
+                        Console.WriteLine(
+                            $"{strTab1}{strDailyAlarmSummaryResponse}");
+
+                        #endregion
+
+                        #region Determine Notification Requirements
+
+                        string strNormalisedTimeBlockType =
+                            strTimeBlockType.Trim();
+
+                        bool blnTransmitForTimeBlock =
+                            strNormalisedTimeBlockType.Equals(
+                                value: "Manual",
+                                comparisonType:
+                                    StringComparison.OrdinalIgnoreCase) ||
+                            strNormalisedTimeBlockType.Equals(
+                                value: "Schedule",
+                                comparisonType:
+                                    StringComparison.OrdinalIgnoreCase);
+
+                        bool alarmNotificationRequired =
+                            alarmEvaluation.AlarmNotificationRequired;
+
+                        bool redRecipientNotificationRequired =
+                            alarmEvaluation.RedNotificationRequired;
+
+                        List<SmsRecipient> selectedSmsRecipients = new();
+
+                        List<string> selectedSmsMobile = new();
+
+                        HashSet<string> selectedSmsPhoneNumbers = new(
+                            comparer: StringComparer.Ordinal);
+
+                        if (alarmNotificationRequired)
+                        {
+                            for (int iRecipientIndex = 0;
+                                iRecipientIndex < smsRecipients.Count;
+                                iRecipientIndex++)
+                            {
+                                SmsRecipient smsRecipient =
+                                    smsRecipients[iRecipientIndex]
+                                    ?? throw new InvalidDataException(
+                                        message:
+                                            $"SMS recipient index " +
+                                            $"{iRecipientIndex} is null.");
+
+                                bool blnRecipientIsEligible =
+                                    smsRecipient.NotificationGroup ==
+                                        SmsNotificationGroup.All ||
+                                    (redRecipientNotificationRequired &&
+                                     smsRecipient.NotificationGroup ==
+                                        SmsNotificationGroup.Red);
+
+                                if (!blnRecipientIsEligible)
+                                {
+                                    continue;
+                                }
+
+                                if (!selectedSmsPhoneNumbers.Add(
+                                    item: smsRecipient.PhoneNumber))
+                                {
+                                    continue;
+                                }
+
+                                selectedSmsRecipients.Add(
+                                    item: smsRecipient);
+
+                                selectedSmsMobile.Add(
+                                    item: smsRecipient.PhoneNumber);
+                            }
+                        }
+
+                        bool scheduledEmailRequired =
+                            blnShouldSend;
+
+                        bool emailRequired =
+                            blnTransmitForTimeBlock &&
+                            (scheduledEmailRequired ||
+                             alarmNotificationRequired);
+
+                        bool smsRequired =
+                            blnTransmitForTimeBlock &&
+                            alarmNotificationRequired &&
+                            selectedSmsMobile.Count > 0;
+
+                        Console.WriteLine(
+                            $"{strTab1}Scheduled email required: " +
+                            $"{scheduledEmailRequired}");
+
+                        Console.WriteLine(
+                            $"{strTab1}Alarm notification required: " +
+                            $"{alarmNotificationRequired}");
+
+                        Console.WriteLine(
+                            $"{strTab1}Red-recipient notification required: " +
+                            $"{redRecipientNotificationRequired}");
+
+                        Console.WriteLine(
+                            $"{strTab1}Email required: {emailRequired}");
+
+                        Console.WriteLine(
+                            $"{strTab1}SMS required: {smsRequired}");
+
+                        Console.WriteLine(
+                            $"{strTab1}Selected SMS recipients: " +
+                            $"{selectedSmsMobile.Count}");
+
+                        #endregion
+
+                        #region Create Export Workbook
+
+                        bool exportFileCreated = false;
+                        string strExportFileResult =
+                            "Export workbook not required.";
+
+                        if (emailRequired)
+                        {
+                            Console.WriteLine(
+                                $"{strTab1}Create the export workbook");
+
+                            try
+                            {
+                                if (string.IsNullOrWhiteSpace(
+                                    value: strMasterWorkbookFullPath))
+                                {
+                                    throw new ArgumentException(
+                                        message:
+                                            "The master workbook path is required.",
+                                        paramName:
+                                            nameof(strMasterWorkbookFullPath));
+                                }
+
+                                if (string.IsNullOrWhiteSpace(
+                                    value: strExportFile))
+                                {
+                                    throw new ArgumentException(
+                                        message:
+                                            "The export workbook path is required.",
+                                        paramName: nameof(strExportFile));
+                                }
+
+                                if (!File.Exists(
+                                    path: strMasterWorkbookFullPath))
+                                {
+                                    throw new FileNotFoundException(
+                                        message:
+                                            "The master workbook was not found.",
+                                        fileName:
+                                            strMasterWorkbookFullPath);
+                                }
+
+                                File.Copy(
+                                    sourceFileName:
+                                        strMasterWorkbookFullPath,
+                                    destFileName: strExportFile,
+                                    overwrite: true);
+
+                                if (!File.Exists(path: strExportFile))
+                                {
+                                    throw new IOException(
+                                        message:
+                                            "The export workbook was not " +
+                                            "created successfully.");
+                                }
+
+                                exportFileCreated = true;
+                                strExportFileResult =
+                                    "Export workbook created successfully.";
+
+                                Console.WriteLine(
+                                    $"{strTab2}{strExportFile}");
+
+                                if (strAlarmVersion.Equals(
+                                    value: "No",
+                                    comparisonType:
+                                        StringComparison.OrdinalIgnoreCase))
+                                {
+                                    Console.WriteLine(
+                                        $"{strTab2}Hide " +
+                                        $"{strReferenceWorksheet}");
+
+                                    gnaSpreadsheetAPI.hideWorksheet(
+                                        strExportFile,
+                                        strReferenceWorksheet);
+
+                                    Console.WriteLine(
+                                        $"{strTab2}Hide " +
+                                        $"{strAlarmsWorksheet}");
+
+                                    gnaSpreadsheetAPI.hideWorksheet(
+                                        strExportFile,
+                                        strAlarmsWorksheet);
+
+                                    Console.WriteLine(
+                                        $"{strTab2}Hide " +
+                                        $"{strSurveyWorksheet}");
+
+                                    gnaSpreadsheetAPI.hideWorksheet(
+                                        strExportFile,
+                                        strSurveyWorksheet);
+                                }
+
+                                Console.WriteLine(
+                                    $"{strTab1}Done");
+                            }
+                            catch (Exception ex)
+                            {
+                                exportFileCreated = false;
+
+                                strExportFileResult =
+                                    $"Export workbook creation failed: " +
+                                    $"{ex.Message}";
+
+                                Console.WriteLine(
+                                    $"{strTab2}{strExportFileResult}");
+                            }
+                        }
+                        else
+                        {
+                            Console.WriteLine(
+                                $"{strTab1}Export workbook not required");
+                        }
+
+                        #endregion
+
+                        #region Trigger Levels
+
                         string strTriggerHeader =
-
                             "\n\n" +
-                            "LIMITING CRITERIA FOR SHORT TWIST (3m baseline)\n" +
+                            "LIMITING CRITERIA FOR SHORT TWIST " +
+                            "(3m baseline)\n" +
                             "Twist < 1 in 500: 500\n" +
                             "Twist between 1 in 500 and 1 in 250: 250\n" +
                             "Twist > 1 in 250: 0\n" +
                             "\n" +
-                            "LIMITING CRITERIA FOR LONG TWIST (15m baseline)\n" +
+                            "LIMITING CRITERIA FOR LONG TWIST " +
+                            "(15m baseline)\n" +
                             "Warp < 1 in 800: 800\n" +
                             "Warp between 1 in 400 and 1 in 800: 400\n" +
                             "Warp > 1 in 400: 0\n" +
@@ -825,218 +1439,648 @@ namespace TrackGeometryReport
 
                         #endregion
 
+                        #region Initialise Transmission Results
 
-                 #region Top,twist, missing targets alarms
-                        Console.WriteLine($"{headingNo++}. Top,Twist,Long Twist, missing targets alarm state & SMS if alarms");
+                        bool emailAttempted = false;
+                        bool emailSuccess = false;
 
-                        // first populate the alarm worksheet "Alarms"
-                        //  Top alarm: Col B: =IF(ABS(I9)>=$V$22,"Red",IF(ABS(I9)>=$V$21,"Amber",IF(ABS(I9)>=$V$20,"OK","")))
-                        //  Short Twist Alarm: Col C: =IF(L9>=$V$8,"OK",IF(L9>=$V$9,"Amber",IF(L9>=$V$10,"Red","")))
-                        //  Long Twist Alarm: Col G: =IF(P13>=$V$14,"OK",IF(P13>=$V$15,"Amber",IF(P13>=$V$16,"Red","")))
-                        //  Col AD: =IF(OR(B8="",B8=0),"",B8)
-                        //  repeat for columns AH and AI
+                        string strEmailTransmissionResult =
+                            emailRequired
+                                ? "Email not attempted."
+                                : blnTransmitForTimeBlock
+                                    ? "Email not required."
+                                    : "Email not attempted: Historic time block.";
 
-                        // generate the alarm message
-                        string strAlarmMessage = gnaSpreadsheetAPI.SPN010AlarmState(
-                            strMasterFile,
-                            strAlarmsWorksheet,
-                            iFirstTrackRow,
-                            strIncludeMissingTargets);
+                        bool smsAttempted = false;
+                        bool smsSuccess = false;
 
-                        string strTimeNow = DateTime.Now.ToString("HH'h'mm");
-                        string strTempMessage = strSMSTitle + ":" + strTimeNow + "\n" + strAlarmMessage;
+                        string strSmsTransmissionResult =
+                            smsRequired
+                                ? "SMS not attempted."
+                                : alarmNotificationRequired &&
+                                  !blnTransmitForTimeBlock
+                                    ? "SMS not attempted: Historic time block."
+                                    : alarmNotificationRequired &&
+                                      selectedSmsMobile.Count == 0
+                                        ? "SMS not required: no recipients " +
+                                          "are eligible for this alarm transition."
+                                    : "SMS not required.";
 
-                        string strMessage = "Time Window: " + strBlockSizeHrs + " hrs\nLatest value only: " + strLatestValueOnly + "\n\n" + strAlarmMessage;
+                        #endregion
 
-                       
 
-                        gnaT.pauseExecution(strStopAtAlarmMessage, strMessage);
 
-                        
-                        if (strAlarmMessage != "No Alarm")
+                        #region Transmit SMS
+
+                        if (smsRequired)
                         {
-                            if (strStopAtAlarmMessage == "No")
-                            {
-                                Console.WriteLine($"\n{strTab1}Alarms detected:\n");
-                                Console.WriteLine($"{strAlarmMessage}\n"); // multiline causes odd output alignment in console
-                            }
-
-                            string SMSmessage = strSMSTitle + ":" + strTimeNow + "\n" + strAlarmMessage;
-
-
-                            // Send the Alarm SMS 
-                            bool smsSuccess = false;
-
-
-                            //=======================================================
-                            // bool smsSuccess = gnaT.sendSMSArray(SMSmessage, smsMobile);
+                            smsAttempted = true;
 
                             try
                             {
+                                string strSystemCredentialsFolderValue =
+                                    runtimeEnvironment.SystemCredentialsFolder
+                                    ?.Trim()
+                                    ?? throw new InvalidOperationException(
+                                        message:
+                                            "SystemCredentialsFolder has " +
+                                            "not been configured.");
+
+                                if (strSystemCredentialsFolderValue.Length == 0)
+                                {
+                                    throw new InvalidOperationException(
+                                        message:
+                                            "SystemCredentialsFolder is empty.");
+                                }
+
+                                string strTwilioCredentialsFullPath =
+                                    Path.Combine(
+                                        path1:
+                                            strSystemCredentialsFolderValue,
+                                        path2:
+                                            TwilioCredentialsFileName);
+
+                                if (!File.Exists(
+                                    path:
+                                        strTwilioCredentialsFullPath))
+                                {
+                                    throw new FileNotFoundException(
+                                        message:
+                                            "The Twilio credentials file " +
+                                            "was not found.",
+                                        fileName:
+                                            strTwilioCredentialsFullPath);
+                                }
+
+                                TimeZoneInfo projectTimeZone =
+                                    TimeZoneInfo.FindSystemTimeZoneById(
+                                        id: strTimeZoneID);
+
+                                DateTimeOffset projectLocalTime =
+                                    TimeZoneInfo.ConvertTime(
+                                        dateTimeOffset:
+                                            DateTimeOffset.UtcNow,
+                                        destinationTimeZone:
+                                            projectTimeZone);
+
+                                string strSmsAlarmEvent =
+                                    alarmEvaluation.RedTransition switch
+                                    {
+                                        RedAlarmTransition.EnteredRed =>
+                                            "Alarm entered RED state",
+
+                                        RedAlarmTransition.LeftRed =>
+                                            "Alarm left RED state",
+
+                                        _ => strAlarmResponse
+                                    };
+
+                                string strSmsTitleWithTime =
+                                    $"{strSMSTitle}:" +
+                                    $"{projectLocalTime:HH'h'mm}: " +
+                                    $"{strSmsAlarmEvent}";
+
+                                string strSmsBody =
+                                    strAlarmResponse.StartsWith(
+                                        value: "Alarm reset",
+                                        comparisonType:
+                                            StringComparison.Ordinal)
+                                        ? "System returned to the " +
+                                          "No Alarm state"
+                                        : strAlarmMessage;
+
+                                string strSmsMessage =
+                                    $"{strSmsTitleWithTime}\n" +
+                                    $"{strSmsBody}";
+
+                                //Console.WriteLine(
+                                //    $"\nSMS transmission" +
+                                //    $"\nRecipients: " +
+                                //    $"{string.Join(", ", selectedSmsMobile)}" +
+                                //    $"\nTitle: {strSmsTitleWithTime}" +
+                                //    $"\nMessage:\n{strSmsBody}");
 
                                 smsSuccess = gnaT.sendSMSArray(
-                                    strSMSmessage: SMSmessage,
-                                    smsMobile: smsMobile);
+                                    strSMSmessage: strSmsMessage,
+                                    smsMobile: selectedSmsMobile,
+                                    strCredentialsFileFullPath:
+                                        strTwilioCredentialsFullPath);
 
+                                strSmsTransmissionResult =
+                                    smsSuccess
+                                        ? "SMS sent successfully"
+                                        : "SMS transmission returned false";
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine(ex.ToString());
+                                smsSuccess = false;
 
-                                Exception? innerException = ex.InnerException;
+                                strSmsTransmissionResult =
+                                    $"SMS transmission exception: " +
+                                    $"{ex.Message}";
+                            }
 
-                                while (innerException != null)
+                            Console.WriteLine(
+                                $"{strTab1}" +
+                                $"{strSmsTransmissionResult}");
+                        }
+
+                        #endregion
+
+                        #region Transmit Email
+
+                        string? originalSendEmail =
+                            emailCreds.SendEmail;
+
+                        string? originalEmailTransmissionDays =
+                            emailCreds.EmailTransmissionDays;
+
+                        string? originalEmailTransmissionTime =
+                            emailCreds.EmailTransmissionTime;
+
+                        string? originalEmailSubject =
+                            emailCreds.Subject;
+
+                        string? originalEmailBody =
+                            emailCreds.Body;
+
+                        List<string>? originalEmailAttachments =
+                            emailCreds.Attachments;
+
+                        string strEmailSubjectUsed = string.Empty;
+
+                        if (emailRequired)
+                        {
+                            if (!exportFileCreated)
+                            {
+                                strEmailTransmissionResult =
+                                    "Email not attempted because the " +
+                                    $"{strExportFileResult}";
+                            }
+                            else
+                            {
+                                emailAttempted = true;
+
+                                try
                                 {
-                                    Console.WriteLine("INNER EXCEPTION:");
-                                    Console.WriteLine(innerException.ToString());
+                                    string strEmailSubjectBase =
+                                        $"{strReportType} Report: " +
+                                        $"{strProjectTitle} " +
+                                        $"({strReportTime})";
 
-                                    innerException = innerException.InnerException;
+                                    if (alarmNotificationRequired)
+                                    {
+                                        emailCreds.SendEmail = "Yes";
+                                        emailCreds.EmailTransmissionDays =
+                                            "All";
+                                        emailCreds.EmailTransmissionTime =
+                                            "Now";
+
+                                        strEmailSubjectUsed =
+                                            $"{strEmailSubjectBase} " +
+                                            $"({strSMSTitle}: " +
+                                            $"{strAlarmResponse})";
+
+                                        emailCreds.Body =
+                                            strAlarmResponse.StartsWith(
+                                                value: "Alarm reset",
+                                                comparisonType:
+                                                    StringComparison.Ordinal)
+                                                ? "System returned to the " +
+                                                  "No Alarm state"
+                                                : strAlarmMessage;
+                                    }
+                                    else
+                                    {
+                                        strEmailSubjectUsed =
+                                            strEmailSubjectBase;
+
+                                        string strSubMessage =
+                                            t4dapi.extractMinTrackGeometry(
+                                                trackPairList:
+                                                    trackPairList,
+                                                prismList:
+                                                    prismList);
+
+                                        string missingPrisms =
+                                            t4dapi.ExtractMissingPrisms(
+                                                prismList);
+
+                                        // Retained for later email-body
+                                        // integration.
+                                        strSubMessage =
+                                            strSubMessage +
+                                            missingPrisms;
+
+                                        string strScheduledEmailMessage =
+                                            $"\nThis is an automated " +
+                                            $"{strReportType} report for " +
+                                            $"contract {strContractTitle}." +
+                                            $"\nPlease do not reply to " +
+                                            $"this email.";
+
+                                        strScheduledEmailMessage +=
+                                            strTriggerHeader +
+                                            "\nPRISMS IN ALARM STATE\n" +
+                                            strAlarmMessage +
+                                            "\n";
+
+                                        emailCreds.Body =
+                                            strScheduledEmailMessage;
+                                    }
+
+                                    emailCreds.Subject =
+                                        strEmailSubjectUsed;
+
+                                    emailCreds.Body =
+                                        gnaT.addCopyright(
+                                            "Track Geometry Report",
+                                            emailCreds.Body
+                                            ?? string.Empty);
+
+                                    emailCreds.Attachments =
+                                        new List<string>
+                                        {
+                                            strExportFile
+                                        };
+
+                                    //Console.WriteLine(
+                                    //    $"\nEmail transmission" +
+                                    //    $"\nRecipients: " +
+                                    //    $"{emailCreds.EmailRecipients ?? "<not configured>"}" +
+                                    //    $"\nSubject: " +
+                                    //    $"{emailCreds.Subject ?? "<not configured>"}" +
+                                    //    $"\nMessage:\n" +
+                                    //    $"{emailCreds.Body ?? "<empty>"}");
+
+                                    strEmailTransmissionResult =
+                                        gnaT.TransmitEmail(
+                                            emailCredentials:
+                                                emailCreds);
+
+                                    emailSuccess = string.Equals(
+                                        a:
+                                            strEmailTransmissionResult,
+                                        b:
+                                            EmailTransmissionSuccess,
+                                        comparisonType:
+                                            StringComparison.Ordinal);
+                                }
+                                catch (Exception ex)
+                                {
+                                    emailSuccess = false;
+
+                                    strEmailTransmissionResult =
+                                        $"Email transmission exception: " +
+                                        $"{ex.Message}";
+                                }
+                                finally
+                                {
+                                    emailCreds.SendEmail =
+                                        originalSendEmail;
+
+                                    emailCreds.EmailTransmissionDays =
+                                        originalEmailTransmissionDays;
+
+                                    emailCreds.EmailTransmissionTime =
+                                        originalEmailTransmissionTime;
+
+                                    emailCreds.Subject =
+                                        originalEmailSubject;
+
+                                    emailCreds.Body =
+                                        originalEmailBody;
+
+                                    emailCreds.Attachments =
+                                        originalEmailAttachments;
                                 }
                             }
 
-
-                            Console.WriteLine($"{strTab1}{(smsSuccess ? "SMS sent" : "SMS failed")}");
-
-                            strMessage = "";
-                            if (smsSuccess == true)
-                            {
-                                strMessage = $"{strReportType} Alarm: SMS Alarm message sent";
-                            }
-                            else
-                            {
-                                strMessage = $"{strReportType} Alarm: SMS Alarm message failed";
-                            }
-
-                            string smsList = string.Join(",", smsMobile);
-                            logFileMessage = strMessage + "(" + smsList + ")";
-                            gnaT.updateSystemLogFile(strSystemLogsFolder, logFileMessage);
-
+                            Console.WriteLine(
+                                $"{strTab2}" +
+                                $"{strEmailTransmissionResult}");
                         }
-                        else
-                        {
-                            Console.WriteLine($"{strTab1}No alarms detected");
-                        }
-                        Console.WriteLine($"{strTab1}Done");
-                        #endregion
-
-
-                 #region Send email if due
-
-
-                        bool blnShouldSend = gnaT.ShouldTransmitEmail(emailCredentials: emailCreds);
-
-                        if (blnShouldSend)
-                        {
-                            Console.WriteLine($"{strTab2}Email is due for transmission.");
-
-                            #region Check time block type
-
-                            string strNormalisedTimeBlockType = strTimeBlockType.Trim();
-
-                            bool blnTransmitForTimeBlock =
-                                strNormalisedTimeBlockType.Equals(value: "Manual", comparisonType: StringComparison.OrdinalIgnoreCase) ||
-                                strNormalisedTimeBlockType.Equals(value: "Schedule", comparisonType: StringComparison.OrdinalIgnoreCase);
-
-                            #endregion
-
-                            #region Send / Do not send
-
-                            if (blnTransmitForTimeBlock)
-                            {
-                                #region Prepare email content
-
-                                emailCreds.Subject = $"{strReportType} Report: {strProjectTitle} ({strReportTime})";
-
-                                string strSubMessage = t4dapi.extractMinTrackGeometry(
-                                        trackPairList: trackPairList,
-                                        prismList: prismList);
-
-                                string missingPrisms = t4dapi.ExtractMissingPrisms(prismList);
-
-                                strSubMessage = strSubMessage + missingPrisms;
-
-                                strMessage =
-                                    $"\nThis is an automated {strReportType} report for contract {strContractTitle}.\nPlease do not reply to this email.";
-
-                                strMessage = strMessage + strTriggerHeader+"\nPRISMS IN ALARM STATE"+ strAlarmMessage+ "\n";
-
-                                strMessage = gnaT.addCopyright("Track Geometry Report", strMessage);
-
-                                emailCreds.Body = strMessage;
-
-                                emailCreds.Attachments = new List<string>
-                            {
-                                strExportFile
-                            };
-
-                                #endregion
-
-                                #region Transmit email
-
-                                string strTransmitResult = gnaT.TransmitEmail(emailCredentials: emailCreds);
-
-                                Console.WriteLine($"{strTab2}{strTransmitResult}");
-
-                                #endregion
-                            }
-                            else
-                            {
-                                #region Do not send for Historic
-
-                                Console.WriteLine($"{strTab2}Email not sent because strTimeBlockType is '{strTimeBlockType}'.");
-
-                                #endregion
-                            }
-
-                            #endregion
-                        }
-                        else
-                        {
-                            #region Email not due
-
-                            Console.WriteLine($"{strTab2}Email is not due for transmission.");
-
-                            #endregion
-                        }
-
-
-
-
-
-
-
-
 
                         #endregion
 
-                        Console.WriteLine($"{strTab1}Done\n");
+                        #region Update Alarm State File
+
+                        bool alarmStateFileUpdated = false;
+                        string strAlarmStateFileResult =
+                            "Alarm-state file not updated.";
+
+                        bool alarmStateUnchanged =
+                            alarmEvaluation.StateChange ==
+                            AlarmStateChange.Unchanged;
+
+                        bool alarmStateUpdateRequired =
+                            alarmStateUnchanged ||
+                            (alarmNotificationRequired &&
+                             emailSuccess);
+
+                        if (alarmStateUpdateRequired)
+                        {
+                            try
+                            {
+                                strAlarmStateFileResult =
+                                    t4dapi.UpdateAlarmStateFile(
+                                        strAlarmMessage:
+                                            strAlarmMessage,
+                                        env:
+                                            runtimeEnvironment);
+
+                                alarmStateFileUpdated = true;
+                            }
+                            catch (Exception ex)
+                            {
+                                alarmStateFileUpdated = false;
+
+                                strAlarmStateFileResult =
+                                    $"Alarm-state file update failed: " +
+                                    $"{ex.Message}";
+                            }
+                        }
+
+                        Console.WriteLine(
+                            $"{strTab1}" +
+                            $"{strAlarmStateFileResult}");
+
+                        #endregion
+
+                        #region Write Consolidated Alarm Activity Log
+
+                        bool activityLogWritten = false;
+                        string strActivityLogResult =
+                            "Activity log not required.";
+
+                        if (alarmNotificationRequired)
+                        {
+                            try
+                            {
+                                TimeZoneInfo projectTimeZone =
+                                    TimeZoneInfo.FindSystemTimeZoneById(
+                                        id: strTimeZoneID);
+
+                                DateTimeOffset projectLocalTime =
+                                    TimeZoneInfo.ConvertTime(
+                                        dateTimeOffset:
+                                            DateTimeOffset.UtcNow,
+                                        destinationTimeZone:
+                                            projectTimeZone);
+
+                                string strLocalActivityTimestamp =
+                                    projectLocalTime.ToString(
+                                        format:
+                                            "yyyy-MM-dd HH:mm:ss zzz",
+                                        formatProvider:
+                                            CultureInfo.InvariantCulture);
+
+                                string strEmailRecipientsForLog =
+                                    emailCreds.EmailRecipients
+                                    ?? string.Empty;
+
+                                string strConfiguredSmsRecipientsForLog =
+                                    smsRecipients.Count == 0
+                                        ? string.Empty
+                                        : string.Join(
+                                            separator: ", ",
+                                            values:
+                                                smsRecipients.Select(
+                                                    selector: recipient =>
+                                                        $"{recipient.ConfigurationKey}=" +
+                                                        $"{recipient.PhoneNumber}" +
+                                                        $"[{recipient.NotificationGroup}]"));
+
+                                string strSelectedSmsRecipientsForLog =
+                                    selectedSmsRecipients.Count == 0
+                                        ? string.Empty
+                                        : string.Join(
+                                            separator: ", ",
+                                            values:
+                                                selectedSmsRecipients.Select(
+                                                    selector: recipient =>
+                                                        $"{recipient.PhoneNumber}" +
+                                                        $"[{recipient.NotificationGroup}]"));
+
+                                StringBuilder activityLogEntry =
+                                    new StringBuilder();
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"[{strLocalActivityTimestamp}] " +
+                                        $"{strAlarmResponse}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"Time block type: " +
+                                        $"{strTimeBlockType}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"Previous alarm severity: " +
+                                        $"{alarmEvaluation.PreviousSeverity}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"Current alarm severity: " +
+                                        $"{alarmEvaluation.CurrentSeverity}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"Alarm state change: " +
+                                        $"{alarmEvaluation.StateChange}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"Red alarm transition: " +
+                                        $"{alarmEvaluation.RedTransition}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"Configured SMS recipients: " +
+                                        $"{strConfiguredSmsRecipientsForLog}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"Selected SMS recipients: " +
+                                        $"{strSelectedSmsRecipientsForLog}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"Email required: " +
+                                        $"{emailRequired}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"Email attempted: " +
+                                        $"{emailAttempted}");
+
+                                string strEmailOutcome =
+                                    emailAttempted
+                                        ? emailSuccess
+                                            ? "Success"
+                                            : "Failed"
+                                        : "Not attempted";
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"Email transmission: " +
+                                        $"{strEmailOutcome}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"Email recipients: " +
+                                        $"{strEmailRecipientsForLog}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"Email result: " +
+                                        $"{strEmailTransmissionResult}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"SMS required: " +
+                                        $"{smsRequired}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"SMS attempted: " +
+                                        $"{smsAttempted}");
+
+                                string strSmsOutcome =
+                                    smsAttempted
+                                        ? smsSuccess
+                                            ? "Success"
+                                            : "Failed"
+                                        : "Not attempted";
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"SMS transmission: " +
+                                        $"{strSmsOutcome}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"SMS recipients: " +
+                                        $"{strSelectedSmsRecipientsForLog}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"SMS result: " +
+                                        $"{strSmsTransmissionResult}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"Alarm-state file updated: " +
+                                        $"{alarmStateFileUpdated}");
+
+                                activityLogEntry.AppendLine(
+                                    value:
+                                        $"Alarm-state file result: " +
+                                        $"{strAlarmStateFileResult}");
+
+                                activityLogEntry.AppendLine();
+
+                                string strSystemActivityLogFullPath =
+                                    Path.Combine(
+                                        path1: strSystemLogsFolder,
+                                        path2:
+                                            SystemActivityLogFileName);
+
+                                File.AppendAllText(
+                                    path:
+                                        strSystemActivityLogFullPath,
+                                    contents:
+                                        activityLogEntry.ToString());
+
+                                activityLogWritten = true;
+                                strActivityLogResult =
+                                    "Activity log written.";
+                            }
+                            catch (Exception ex)
+                            {
+                                activityLogWritten = false;
+
+                                strActivityLogResult =
+                                    $"Activity log failed: " +
+                                    $"{ex.Message}";
+                            }
+
+                            Console.WriteLine(
+                                $"{strTab1}" +
+                                $"{strActivityLogResult}");
+                        }
+
+                        #endregion
+
+                        #region Echo Transmission Summary
+
+                        if (emailRequired ||
+                            smsRequired ||
+                            alarmNotificationRequired)
+                        {
+                            string strActivityLogSummary =
+                                alarmNotificationRequired
+                                    ? activityLogWritten
+                                        ? "Written"
+                                        : "Failed"
+                                    : "Not required";
+
+                            //Console.WriteLine(
+                            //    $"{strTab1}Notification summary: " +
+                            //    $"Email={strEmailTransmissionResult}; " +
+                            //    $"SMS={strSmsTransmissionResult}; " +
+                            //    $"AlarmStateUpdated=" +
+                            //    $"{alarmStateFileUpdated}; " +
+                            //    $"ActivityLog=" +
+                            //    $"{strActivityLogSummary}");
+                        }
+                        else
+                        {
+                            Console.WriteLine(
+                                $"{strTab1}No email or SMS required");
+                        }
+
+                        #endregion
+
+                        Console.WriteLine($"{strTab1}Time block completed\n");
                     }
-
-
                 }
 
-
-
-
-
-
-
-
-
-
-
+#endregion
 
 
 ThatsAllFolks:
 
-                Console.WriteLine("\nTrack Geometry Report completed...\n\n");
-                gnaT.freezeScreen(strFreezeScreen);
-                Environment.Exit(0);
+                FinishAndExit(strReportType);
 
             }
             catch (Exception ex)
             {
-                File.WriteAllText("fatal_crash.log", ex.ToString());
+                try
+                {
+                    string? strFatalCrashFolder =
+                        Path.GetDirectoryName(
+                            path: strFatalCrashLogFullPath);
+
+                    if (!string.IsNullOrWhiteSpace(
+                        value: strFatalCrashFolder))
+                    {
+                        Directory.CreateDirectory(
+                            path: strFatalCrashFolder);
+                    }
+
+                    File.WriteAllText(
+                        path: strFatalCrashLogFullPath,
+                        contents: ex.ToString());
+                }
+                catch
+                {
+                    // The original exception remains the primary failure.
+                }
+
+                Console.Error.WriteLine(ex.ToString());
+                Environment.ExitCode = 1;
             }
 
 
@@ -1161,12 +2205,6 @@ ThatsAllFolks:
                 return value;
             }
         }
-
-
         #endregion
-
-
-
-
     }
 }

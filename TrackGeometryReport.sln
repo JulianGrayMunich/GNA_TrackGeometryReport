@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
-VisualStudioVersion = 18.4.11626.88 stable
+VisualStudioVersion = 18.4.11626.88
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TrackGeometryReport", "TrackGeometryReport.csproj", "{ED38ADD5-1A30-44DE-A962-98E00EEF3ED9}"
 EndProject
@@ -16,6 +16,12 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GNAsurveycalcs", "..\..\GNAsurveytools\GNAsurvey\GNAsurveycalcs.csproj", "{FF7B7838-17E1-AC50-1846-7E472D84333C}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "T4Dlibrary", "..\..\T4Dlibrary\T4Dlibrary\T4Dlibrary.csproj", "{4766B335-77FB-FE9D-5D14-4E0569A1EF42}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{D08063B5-0C0A-4E4C-BC1F-C1AEC67DDA39}"
+	ProjectSection(SolutionItems) = preProject
+		..\..\..\..\Users\acer\Downloads\SmsNotificationModels.cs = ..\..\..\..\Users\acer\Downloads\SmsNotificationModels.cs
+		..\..\..\..\Users\acer\Downloads\T4Dapi.cs = ..\..\..\..\Users\acer\Downloads\T4Dapi.cs
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
