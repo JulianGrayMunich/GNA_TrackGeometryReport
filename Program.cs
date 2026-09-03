@@ -1,4 +1,5 @@
-﻿using System;
+#region Using Statements
+using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Configuration;
@@ -22,24 +23,16 @@ using GNAsurveytools;
 
 using T4Dlibrary;
 
+using GNATrackGeometryDataCapture;
+
+using TrackGeometryExporter =
+    GNATrackGeometryExport.GNATrackGeometryExport;
+
 using static System.Runtime.InteropServices.JavaScript.JSType;
 
-//using System.ComponentModel;
-//using System.Data;
-//using System.Data.Common;
-//using System.Diagnostics;
-//using System.IO;
-//using System.Linq;
-//using System.Reflection;
-//using System.Reflection.Metadata.Ecma335;
-//using EASendMail;
-//using Microsoft.Data.SqlClient;
-//using OfficeOpenXml;
-//using Twilio.Rest.Api.V2010.Account;
-//using Twilio.Rest.Sync.V1.Service.SyncStream;
-//using Twilio.TwiML.Messaging;
-//using Twilio.TwiML.Voice;
-//using static T4Dlibrary.T4Dapi;
+#endregion
+
+
 
 namespace TrackGeometryReport
 {
@@ -115,6 +108,37 @@ namespace TrackGeometryReport
 
                 #region Read config early
                 NameValueCollection config = ConfigurationManager.AppSettings;
+
+                bool WriteDataToDBTrackGeometry =
+                    ConfigParsing.GetBoolYesNo(
+                        appSettings: config,
+                        key: "WriteDataToDBTrackGeometry");
+
+                string? strDBTrackConnectionString = null;
+
+                if (WriteDataToDBTrackGeometry)
+                {
+                    ConnectionStringSettings
+                        dbTrackGeometryConnectionSettings =
+                            ConfigurationManager.ConnectionStrings[
+                                "DBTrackGeometryConnectionString"]
+                            ?? throw new ConfigurationErrorsException(
+                                "Connection string " +
+                                "'DBTrackGeometryConnectionString' is missing.");
+
+                    strDBTrackConnectionString =
+                        dbTrackGeometryConnectionSettings.ConnectionString
+                            ?.Trim();
+
+                    if (string.IsNullOrWhiteSpace(
+                        value: strDBTrackConnectionString))
+                    {
+                        throw new ConfigurationErrorsException(
+                            "Connection string " +
+                            "'DBTrackGeometryConnectionString' is empty.");
+                    }
+                }
+
                 bool freezeScreen = ConfigParsing.GetBoolYesNo(config, "freezeScreen");
                 bool prepareReferenceData = ConfigParsing.GetBoolYesNo(config, "prepareReferenceData");
                 bool computeMean = ConfigParsing.GetBoolYesNo(config, "computeMean");
@@ -122,6 +146,68 @@ namespace TrackGeometryReport
                 string strcomputeMeans = computeMean ? "Yes" : "No";
                 string strFreezeScreen = freezeScreen ? "Yes" : "No";
                 string strPrepareReferenceData = prepareReferenceData ? "Yes" : "No";
+                #endregion
+
+                #region Capture process-local DBTrackGeometry context
+
+                TrackGeometryExporter? dbTrackGeometryExporter =
+                    null;
+
+                DBTrackGeometryExportContext? dbTrackGeometryExportContext =
+                    null;
+
+                bool dbTrackGeometryRunFailure =
+                    false;
+
+                if (WriteDataToDBTrackGeometry)
+                {
+                    try
+                    {
+                        dbTrackGeometryExporter =
+                            new TrackGeometryExporter();
+
+                        dbTrackGeometryExportContext =
+                            dbTrackGeometryExporter
+                                .LoadExportContextFromRegistry(
+                                    databaseConnectionString:
+                                        strDBTrackConnectionString
+                                        ?? throw new InvalidOperationException(
+                                            "The DBTrackGeometry connection " +
+                                            "string was not initialised."));
+
+                        Console.WriteLine(
+                            $"{strTab1}DBTrackGeometry process context captured");
+
+                        Console.WriteLine(
+                            $"{strTab2}Project_ID: " +
+                            $"{dbTrackGeometryExportContext.ProjectId}");
+
+                        Console.WriteLine(
+                            $"{strTab2}Project: " +
+                            $"{dbTrackGeometryExportContext.RegistryProjectName}");
+                    }
+                    catch (Exception ex)
+                    {
+                        dbTrackGeometryRunFailure =
+                            true;
+
+                        dbTrackGeometryExporter =
+                            null;
+
+                        dbTrackGeometryExportContext =
+                            null;
+
+                        Console.WriteLine(
+                            $"{strTab1}WARNING: DBTrackGeometry process " +
+                            "context could not be captured. Database export " +
+                            "will be skipped, but report processing will continue.");
+
+                        Console.WriteLine(
+                            $"{strTab2}{ex.GetType().FullName}: " +
+                            $"{ex.Message}");
+                    }
+                }
+
                 #endregion
 
                 #region License validation
@@ -146,7 +232,6 @@ namespace TrackGeometryReport
                 {
                     Console.WriteLine($"{strTab2}T4DAPI validated");
                 }
-                gnaT.epplusLicense();
                 Console.WriteLine($"{strTab1}Done");
                 #endregion
 
@@ -193,7 +278,8 @@ namespace TrackGeometryReport
                         $"\n{strTab1}The Excel workbook is currently open or locked:\n " +
                         $"'{strMasterWorkbookFullPath}'.";
                     Console.WriteLine($"{message}\nExecution stopped...\n");
-                    Environment.Exit(exitCode: 0);
+                    throw new IOException(
+                        message: message);
                 }
                 else
                 {
@@ -204,7 +290,22 @@ namespace TrackGeometryReport
                 #region Config variables
                 Console.WriteLine($"{headingNo++}. System variables");
 
-                string strDBconnection = ConfigurationManager.ConnectionStrings["DBconnectionString"].ConnectionString;
+                ConnectionStringSettings monitoringConnectionSettings =
+                    ConfigurationManager.ConnectionStrings[
+                        "DBconnectionString"]
+                    ?? throw new ConfigurationErrorsException(
+                        "Connection string 'DBconnectionString' is missing.");
+
+                string strDBconnection =
+                    monitoringConnectionSettings.ConnectionString
+                        ?.Trim()
+                    ?? string.Empty;
+
+                if (strDBconnection.Length == 0)
+                {
+                    throw new ConfigurationErrorsException(
+                        "Connection string 'DBconnectionString' is empty.");
+                }
 
                 string strClient = ConfigParsing.GetRequiredString(config, "Client");
 
@@ -235,6 +336,22 @@ namespace TrackGeometryReport
 
                 string strDeleteMissingValues = config["DeleteMissingValues"];
                 string strLatestValueOnly = config["LatestValueOnly"];
+
+                double prismOutlierLimit =
+                    ConfigParsing.GetRequiredDouble(
+                        appSettings: config,
+                        key: "prismOutlierLimit");
+
+                if (!double.IsFinite(
+                        d: prismOutlierLimit) ||
+                    prismOutlierLimit <= 0.0)
+                {
+                    throw new ConfigurationErrorsException(
+                        "appSetting 'prismOutlierLimit' must be a finite " +
+                        "number greater than zero.");
+                }
+
+
                 #endregion
 
                 #region Report variables
@@ -247,12 +364,15 @@ namespace TrackGeometryReport
                 #endregion
 
                 #region System variables
+
                 Console.WriteLine($"{strTab1}Done");
                 #endregion
 
                 #region General variables
 
                 Console.WriteLine($"{strTab1}General variables");
+
+                int iTimeblockCounter = 1;
 
                 string strReferenceLineTerminalsEaNaEbNb = CleanConfig(config["ReferenceLineTerminalsEaNaEbNb"]);
 
@@ -283,14 +403,6 @@ namespace TrackGeometryReport
                 strFatalCrashLogFullPath = Path.Combine(
                     path1: strSystemLogsFolder,
                     path2: "fatal_crash.log");
-
-                var cs = ConfigurationManager.ConnectionStrings["DBconnectionString"];
-                if (cs == null || string.IsNullOrWhiteSpace(cs.ConnectionString))
-                {
-                    string message = "\nMissing connection string 'DBconnectionString'.";
-                    Console.WriteLine(message);
-                    throw new ConfigurationErrorsException(message);
-                }
 
                 string strFirstDataRow = iFirstDataRow.ToString(CultureInfo.InvariantCulture);
                 string strFirstOutputRow = iFirstOutputRow.ToString(CultureInfo.InvariantCulture);
@@ -328,6 +440,12 @@ namespace TrackGeometryReport
                 string strIsBodyHtml = CleanConfig(config["IsBodyHtml"]);
                 string strEmailTransmissionDays = CleanConfig(config["EmailTransmissionDays"]);
                 string strEmailTransmissionTime = CleanConfig(config["EmailTransmissionTime"]);
+
+                bool blnEmailTransmissionEnabled =
+                    strSendEmail.Equals(
+                        value: "Yes",
+                        comparisonType:
+                            StringComparison.OrdinalIgnoreCase);
 
                 string strEmailLogin = CleanConfig(config["EmailLogin"]);
                 string strEmailPassword = CleanConfig(config["EmailPassword"]);
@@ -577,6 +695,7 @@ namespace TrackGeometryReport
                 {
                     // ---- Database ----
                     DbConnectionString = strDBconnection,
+                    DBTrackConnectionString = strDBTrackConnectionString,
                     ProjectTitle = strProjectTitle,
                     ReportType = strReportType,
 
@@ -652,8 +771,6 @@ namespace TrackGeometryReport
                         gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricCantWorksheet);
                         gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricTwistWorksheet);
                         gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricLongTwistWorksheet);
-                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricTwistWorksheet);
-                        gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricLongTwistWorksheet);
                         gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricTopWorksheet);
                         gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricdHWorksheet);
                         gnaSpreadsheetAPI.checkWorksheetExists(strMasterWorkbookFullPath, strHistoricSlewWorksheet);
@@ -725,6 +842,12 @@ namespace TrackGeometryReport
                                 $"'{strTimeBlockType}'. Expected Manual, " +
                                 "Schedule, or Historic.",
                             paramName: nameof(strTimeBlockType));
+                }
+
+                if (subBlocks.Count == 0)
+                {
+                    throw new InvalidOperationException(
+                        "Time-block generation returned no blocks.");
                 }
 
                 string strTimeStampLocal;
@@ -853,13 +976,14 @@ namespace TrackGeometryReport
 
                     prismList = t4dapi.removeOutliers(
                         pointsList: prismList,
-                        checkDistance: 0.3);
+                        checkDistance: prismOutlierLimit);
 
                     string result = t4dapi.writeDeltasToReferenceWorksheet(
                         prismList: prismList,
                         blockStartUTC: blockStartUTC,
                         blockEndUTC: blockEndUTC,
-                        runtimeEnvironment: runtimeEnvironment);
+                        runtimeEnvironment: runtimeEnvironment,
+                        prismOutlierLimit: prismOutlierLimit);
                     Console.WriteLine($"{strTab1}{result}");
 
 
@@ -879,6 +1003,9 @@ namespace TrackGeometryReport
                     Console.WriteLine($"{strTab1}Reference data preparation skipped");
                 }
                 #endregion
+
+
+
 
                 #region Time block processing
                 Console.WriteLine($"{headingNo++}. Process time blocks: {strTimeBlockType}");
@@ -915,6 +1042,14 @@ namespace TrackGeometryReport
 
                     foreach (var block in subBlocks)
                     {
+
+                        #region Reset prism data for the current time block
+
+                        prismList =
+                            gnaSpreadsheetAPI.GetPrismConstantData(
+                                RuntimeEnvironment: runtimeEnvironment);
+
+                        #endregion
 
                         #region Preparing time block strings
                         // Note that these time blocks have been adjusted for time zone offset
@@ -961,17 +1096,18 @@ namespace TrackGeometryReport
                         #region Remove Outliers
                         currentDeltas = t4dapi.removeOutliers(
                             pointsList: currentDeltas,
-                            checkDistance: 100);
+                            checkDistance: prismOutlierLimit);
 
                         prismList = t4dapi.combinePointsLists(parentList: prismList, childList: currentDeltas);
 
                         prismList = t4dapi.removeOutliers(
                             pointsList: prismList,
-                            checkDistance: 100);
+                            checkDistance: prismOutlierLimit);
 
                         prismList = t4dapi.checkForMissingReadings(
                             pointList: prismList);
                         #endregion
+
 
                         #region Writing geometry to workbook
 
@@ -981,7 +1117,8 @@ namespace TrackGeometryReport
                             prismList: prismList,
                             blockStartUTC: strTimeBlockStartUTC,
                             blockEndUTC: strTimeBlockEndUTC,
-                            runtimeEnvironment: runtimeEnvironment);
+                            runtimeEnvironment: runtimeEnvironment,
+                            prismOutlierLimit: prismOutlierLimit);
 
                         Console.WriteLine($"{strTab1}{result}");
                         if (!string.Equals(result, "writeDeltasToReferenceWorksheet: Success.", StringComparison.Ordinal))
@@ -1020,22 +1157,36 @@ namespace TrackGeometryReport
                             strTimeBlockType: strTimeBlockType,
                             strRecordHistoricData: strRecordHistoricData);
 
+                        Console.WriteLine($"{strTab1}{result}");
+
+                        if (!string.Equals(
+                            a: result,
+                            b: "writeTrackGeometryToWorkbook: Success.",
+                            comparisonType: StringComparison.Ordinal))
+                        {
+                            Console.WriteLine(
+                                $"\nExecution halted: {result}");
+
+                            throw new InvalidOperationException(
+                                message: result);
+                        }
+
                         #endregion
 
-                        #region Compute slew
+                        #region Compute slew and versine
 
                         Console.WriteLine(
-                            $"{strTab1}Compute track slew");
+                            $"{strTab1}Compute track slew and versine");
 
-                        bool blnTrackSlewSuccess =
-                            gnaSpreadsheetAPI.computeTrackSlew(
+                        bool blnTrackSlewAndVersineSuccess =
+                            gnaSpreadsheetAPI.computeTrackSlewAndVersine(
                                 env: runtimeEnvironment,
                                 prismList: prismList,
                                 trackPairList: trackPairList,
                                 strTimeBlockEndUTC: strTimeBlockEndUTC);
 
                         Console.WriteLine(
-                            $"{strTab2}Success: {blnTrackSlewSuccess}");
+                            $"{strTab2}Success: {blnTrackSlewAndVersineSuccess}");
 
                         bool blnWriteHistoricSlew =
                             t4dapi.ShouldWriteHistoricData(
@@ -1125,10 +1276,10 @@ namespace TrackGeometryReport
 
                         #endregion
 
-                        #region Check Alarm State
+                        #region Activity States
 
                         Console.WriteLine(
-                            $"{headingNo++}. Checking alarm state");
+                            $"{headingNo++}. Activity states");
 
                         string strAlarmMessage =
                             gnaSpreadsheetAPI.SPN010AlarmState(
@@ -1214,8 +1365,16 @@ namespace TrackGeometryReport
                         bool alarmNotificationRequired =
                             alarmEvaluation.AlarmNotificationRequired;
 
+                        bool missingTargetsChanged =
+                            t4dapi.HaveMissingTargetsChanged(
+                                strPreviousAlarmState:
+                                    alarmEvaluation.PreviousAlarmState,
+                                strCurrentAlarmState:
+                                    alarmEvaluation.CurrentAlarmState);
+
                         bool redRecipientNotificationRequired =
-                            alarmEvaluation.RedNotificationRequired;
+                            alarmEvaluation.RedNotificationRequired ||
+                            missingTargetsChanged;
 
                         List<SmsRecipient> selectedSmsRecipients = new();
 
@@ -1267,6 +1426,7 @@ namespace TrackGeometryReport
                             blnShouldSend;
 
                         bool emailRequired =
+                            blnEmailTransmissionEnabled &&
                             blnTransmitForTimeBlock &&
                             (scheduledEmailRequired ||
                              alarmNotificationRequired);
@@ -1287,6 +1447,10 @@ namespace TrackGeometryReport
                         Console.WriteLine(
                             $"{strTab1}Red-recipient notification required: " +
                             $"{redRecipientNotificationRequired}");
+
+                        Console.WriteLine(
+                            $"{strTab1}Missing-target list changed: " +
+                            $"{missingTargetsChanged}");
 
                         Console.WriteLine(
                             $"{strTab1}Email required: {emailRequired}");
@@ -1416,6 +1580,169 @@ namespace TrackGeometryReport
 
                         #endregion
 
+                        #region Capture DBTrackGeometry epoch data
+
+                        DBTrackGeometryCaptureResult?
+                            dbTrackGeometryCaptureResult = null;
+
+                        if (WriteDataToDBTrackGeometry &&
+                            dbTrackGeometryExporter is not null &&
+                            dbTrackGeometryExportContext is not null)
+                        {
+                            if (!blnTrackSlewAndVersineSuccess)
+                            {
+                                Console.WriteLine(
+                                    $"{strTab1}WARNING: Track Slew/Versine " +
+                                    "calculation did not succeed. Independent " +
+                                    "DBTrackGeometry categories will still be " +
+                                    "captured and processed.");
+                            }
+
+                            try
+                            {
+                                DBTrackGeometryDataCapture dataCapture =
+                                    new();
+
+                                dbTrackGeometryCaptureResult =
+                                    dataCapture.Capture(
+                                        prismList: prismList,
+                                        trackPairList: trackPairList,
+                                        strReportUtc: strTimeBlockEndUTC);
+
+                                Console.WriteLine(
+                                    $"{strTab1}DBTrackGeometry data captured");
+
+                                Console.WriteLine(
+                                    $"{strTab2}Point epochs: " +
+                                    $"{dbTrackGeometryCaptureResult.PointEpochs.Count}");
+
+                                Console.WriteLine(
+                                    $"{strTab2}Pair epochs: " +
+                                    $"{dbTrackGeometryCaptureResult.PairEpochs.Count}");
+                            }
+                            catch (Exception ex)
+                            {
+                                dbTrackGeometryRunFailure =
+                                    true;
+
+                                dbTrackGeometryCaptureResult = null;
+
+                                Console.WriteLine(
+                                    $"{strTab1}WARNING: DBTrackGeometry data " +
+                                    "capture failed. Existing report processing " +
+                                    "will continue.");
+
+                                Console.WriteLine(
+                                    $"{strTab2}{ex.GetType().FullName}: " +
+                                    $"{ex.Message}");
+                            }
+                        }
+                        else if (WriteDataToDBTrackGeometry)
+                        {
+                            dbTrackGeometryRunFailure =
+                                true;
+
+                            Console.WriteLine(
+                                $"{strTab1}DBTrackGeometry data capture skipped " +
+                                "because the process context is unavailable");
+                        }
+
+                        #endregion
+
+
+
+                        #region Write to DBTrackGeometry
+
+                        if (!WriteDataToDBTrackGeometry)
+                        {
+                            Console.WriteLine(
+                                $"{strTab1}DBTrackGeometry export not required");
+                        }
+                        else if (dbTrackGeometryExporter is null ||
+                            dbTrackGeometryExportContext is null)
+                        {
+                            dbTrackGeometryRunFailure =
+                                true;
+
+                            Console.WriteLine(
+                                $"{strTab1}WARNING: DBTrackGeometry export " +
+                                "cannot proceed because the process context " +
+                                "is unavailable.");
+                        }
+                        else if (dbTrackGeometryCaptureResult is null)
+                        {
+                            dbTrackGeometryRunFailure =
+                                true;
+
+                            Console.WriteLine(
+                                $"{strTab1}WARNING: DBTrackGeometry export " +
+                                "cannot proceed because the captured data is NULL.");
+                        }
+                        else
+                        {
+                            try
+                            {
+                                DBTrackGeometryEpochBatch epochBatch =
+                                    dbTrackGeometryExporter
+                                        .PrepareEpochBatchAsync(
+                                            exportContext:
+                                                dbTrackGeometryExportContext,
+                                            pointEpochs:
+                                                dbTrackGeometryCaptureResult.PointEpochs,
+                                            pairEpochs:
+                                                dbTrackGeometryCaptureResult.PairEpochs)
+                                        .GetAwaiter()
+                                        .GetResult();
+
+                                TrackGeometryExporter
+                                    .EchoEpochBatchValidationSummary(
+                                        epochBatch: epochBatch);
+
+                                DBTrackGeometryEpochWriteResult writeResult =
+                                    dbTrackGeometryExporter
+                                        .WriteEpochBatchAsync(
+                                            exportContext:
+                                                dbTrackGeometryExportContext,
+                                            epochBatch: epochBatch)
+                                        .GetAwaiter()
+                                        .GetResult();
+
+                                TrackGeometryExporter.EchoEpochWriteSummary(
+                                    writeResult: writeResult);
+
+                                if (writeResult.Outcome != "Success")
+                                {
+                                    dbTrackGeometryRunFailure =
+                                        true;
+
+                                    Console.WriteLine(
+                                        $"{strTab1}WARNING: DBTrackGeometry " +
+                                        $"completed with outcome " +
+                                        $"{writeResult.Outcome}. Existing report " +
+                                        "processing will continue.");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                dbTrackGeometryRunFailure =
+                                    true;
+
+                                Console.WriteLine(
+                                    $"{strTab1}WARNING: DBTrackGeometry export " +
+                                    "failed. Existing report processing will continue.");
+
+                                Console.WriteLine(
+                                    $"{strTab2}{ex.GetType().FullName}: " +
+                                    $"{ex.Message}");
+                            }
+                        }
+
+
+                        #endregion
+
+
+
+
                         #region Trigger Levels
 
                         string strTriggerHeader =
@@ -1467,8 +1794,6 @@ namespace TrackGeometryReport
                                     : "SMS not required.";
 
                         #endregion
-
-
 
                         #region Transmit SMS
 
@@ -1532,6 +1857,9 @@ namespace TrackGeometryReport
                                         RedAlarmTransition.LeftRed =>
                                             "Alarm left RED state",
 
+                                        _ when missingTargetsChanged =>
+                                            "Missing targets changed",
+
                                         _ => strAlarmResponse
                                     };
 
@@ -1541,13 +1869,11 @@ namespace TrackGeometryReport
                                     $"{strSmsAlarmEvent}";
 
                                 string strSmsBody =
-                                    strAlarmResponse.StartsWith(
-                                        value: "Alarm reset",
-                                        comparisonType:
-                                            StringComparison.Ordinal)
-                                        ? "System returned to the " +
-                                          "No Alarm state"
-                                        : strAlarmMessage;
+                                    t4dapi.BuildSmsAlarmBody(
+                                        strAlarmMessage: strAlarmMessage,
+                                        alarmEvaluation: alarmEvaluation,
+                                        blnMissingTargetsChanged:
+                                            missingTargetsChanged);
 
                                 string strSmsMessage =
                                     $"{strSmsTitleWithTime}\n" +
@@ -2051,6 +2377,17 @@ namespace TrackGeometryReport
 
 
 ThatsAllFolks:
+
+                if (!prepareReferenceData &&
+                    dbTrackGeometryRunFailure)
+                {
+                    Console.Error.WriteLine(
+                        "DBTrackGeometry export did not complete successfully. " +
+                        "The process exit code has been set to 1.");
+
+                    Environment.ExitCode =
+                        1;
+                }
 
                 FinishAndExit(strReportType);
 

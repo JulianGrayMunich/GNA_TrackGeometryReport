@@ -9,7 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="EASendMail" Version="7.9.3.2" />
-    <PackageReference Include="EPPlus" Version="8.6.3" />
+    <PackageReference Include="EPPlus" Version="8.7.0" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.2" />
     <PackageReference Include="System.Configuration.ConfigurationManager" Version="10.0.11" />
     <PackageReference Include="Twilio" Version="7.14.9" />
@@ -24,8 +24,10 @@
     <ProjectReference Include="..\..\gnaDataClasses\gnaDataClasses\gnaDataClasses.csproj" />
     <ProjectReference Include="..\..\GNAsurveytools\GNAsurvey\GNAsurveycalcs.csproj" />
     <ProjectReference Include="..\..\GNAtools\GNAtools\GNAtools.csproj" />
+    <ProjectReference Include="..\..\GNATrackGeometryExport\GNATrackGeometryExport\GNATrackGeometryExport.csproj" />
     <ProjectReference Include="..\..\GNA_CommercialLicenseValidator\GNA_CommercialLicenseValidator\GNA_CommercialLicenseValidator.csproj" />
     <ProjectReference Include="..\..\T4Dlibrary\T4Dlibrary\T4Dlibrary.csproj" />
+    <ProjectReference Include="..\..\GNATrackGeometryDataCapture\GNATrackGeometryDataCapture\GNATrackGeometryDataCapture.csproj" />
   </ItemGroup>
 
 </Project>
