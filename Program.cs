@@ -1436,41 +1436,49 @@ namespace TrackGeometryReport
                             alarmNotificationRequired &&
                             selectedSmsMobile.Count > 0;
 
-                        Console.WriteLine(
-                            $"{strTab1}Scheduled email required: " +
-                            $"{scheduledEmailRequired}");
 
-                        Console.WriteLine(
-                            $"{strTab1}Alarm notification required: " +
-                            $"{alarmNotificationRequired}");
+                        if (debug)
+                        {
+                            Console.WriteLine(
+                                                        $"{strTab1}Scheduled email required: " +
+                                                        $"{scheduledEmailRequired}");
 
-                        Console.WriteLine(
-                            $"{strTab1}Red-recipient notification required: " +
-                            $"{redRecipientNotificationRequired}");
+                            Console.WriteLine(
+                                $"{strTab1}Alarm notification required: " +
+                                $"{alarmNotificationRequired}");
 
-                        Console.WriteLine(
-                            $"{strTab1}Missing-target list changed: " +
-                            $"{missingTargetsChanged}");
+                            Console.WriteLine(
+                                $"{strTab1}Red-recipient notification required: " +
+                                $"{redRecipientNotificationRequired}");
 
-                        Console.WriteLine(
-                            $"{strTab1}Email required: {emailRequired}");
+                            Console.WriteLine(
+                                $"{strTab1}Missing-target list changed: " +
+                                $"{missingTargetsChanged}");
 
-                        Console.WriteLine(
-                            $"{strTab1}SMS required: {smsRequired}");
+                            Console.WriteLine(
+                                $"{strTab1}Email required: {emailRequired}");
 
-                        Console.WriteLine(
-                            $"{strTab1}Selected SMS recipients: " +
-                            $"{selectedSmsMobile.Count}");
+                            Console.WriteLine(
+                                $"{strTab1}SMS required: {smsRequired}");
 
+                            Console.WriteLine(
+                                $"{strTab1}Selected SMS recipients: " +
+                                $"{selectedSmsMobile.Count}");
+                        }
                         #endregion
 
                         #region Create Export Workbook
 
                         bool exportFileCreated = false;
                         string strExportFileResult =
-                            "Export workbook not required.";
+                            "Export workbook not attempted.";
 
-                        if (emailRequired)
+                        bool exportWorkbookRequired =
+                            gnaT.ShouldCreateExportWorkbook(
+                                strTimeBlockType:
+                                    strTimeBlockType);
+
+                        if (exportWorkbookRequired)
                         {
                             Console.WriteLine(
                                 $"{strTab1}Create the export workbook");
@@ -1570,178 +1578,190 @@ namespace TrackGeometryReport
 
                                 Console.WriteLine(
                                     $"{strTab2}{strExportFileResult}");
+
+                                throw new IOException(
+                                    message:
+                                        $"The required export workbook " +
+                                        $"could not be created at " +
+                                        $"'{strExportFile}'.",
+                                    innerException: ex);
                             }
                         }
                         else
                         {
                             Console.WriteLine(
-                                $"{strTab1}Export workbook not required");
+                                $"{strTab1}Export workbook not required " +
+                                $"for time-block type " +
+                                $"'{strTimeBlockType}'");
                         }
 
                         #endregion
 
-                        #region Capture DBTrackGeometry epoch data
-
-                        DBTrackGeometryCaptureResult?
-                            dbTrackGeometryCaptureResult = null;
-
-                        if (WriteDataToDBTrackGeometry &&
-                            dbTrackGeometryExporter is not null &&
-                            dbTrackGeometryExportContext is not null)
+                        if (WriteDataToDBTrackGeometry)
                         {
-                            if (!blnTrackSlewAndVersineSuccess)
-                            {
-                                Console.WriteLine(
-                                    $"{strTab1}WARNING: Track Slew/Versine " +
-                                    "calculation did not succeed. Independent " +
-                                    "DBTrackGeometry categories will still be " +
-                                    "captured and processed.");
-                            }
+                            Console.WriteLine($"{strTab1}DBTrackGeometry export required");
+                            #region Capture DBTrackGeometry epoch data
 
-                            try
-                            {
-                                DBTrackGeometryDataCapture dataCapture =
-                                    new();
-
-                                dbTrackGeometryCaptureResult =
-                                    dataCapture.Capture(
-                                        prismList: prismList,
-                                        trackPairList: trackPairList,
-                                        strReportUtc: strTimeBlockEndUTC);
-
-                                Console.WriteLine(
-                                    $"{strTab1}DBTrackGeometry data captured");
-
-                                Console.WriteLine(
-                                    $"{strTab2}Point epochs: " +
-                                    $"{dbTrackGeometryCaptureResult.PointEpochs.Count}");
-
-                                Console.WriteLine(
-                                    $"{strTab2}Pair epochs: " +
-                                    $"{dbTrackGeometryCaptureResult.PairEpochs.Count}");
-                            }
-                            catch (Exception ex)
-                            {
-                                dbTrackGeometryRunFailure =
-                                    true;
-
+                            DBTrackGeometryCaptureResult?
                                 dbTrackGeometryCaptureResult = null;
 
-                                Console.WriteLine(
-                                    $"{strTab1}WARNING: DBTrackGeometry data " +
-                                    "capture failed. Existing report processing " +
-                                    "will continue.");
-
-                                Console.WriteLine(
-                                    $"{strTab2}{ex.GetType().FullName}: " +
-                                    $"{ex.Message}");
-                            }
-                        }
-                        else if (WriteDataToDBTrackGeometry)
-                        {
-                            dbTrackGeometryRunFailure =
-                                true;
-
-                            Console.WriteLine(
-                                $"{strTab1}DBTrackGeometry data capture skipped " +
-                                "because the process context is unavailable");
-                        }
-
-                        #endregion
-
-
-
-                        #region Write to DBTrackGeometry
-
-                        if (!WriteDataToDBTrackGeometry)
-                        {
-                            Console.WriteLine(
-                                $"{strTab1}DBTrackGeometry export not required");
-                        }
-                        else if (dbTrackGeometryExporter is null ||
-                            dbTrackGeometryExportContext is null)
-                        {
-                            dbTrackGeometryRunFailure =
-                                true;
-
-                            Console.WriteLine(
-                                $"{strTab1}WARNING: DBTrackGeometry export " +
-                                "cannot proceed because the process context " +
-                                "is unavailable.");
-                        }
-                        else if (dbTrackGeometryCaptureResult is null)
-                        {
-                            dbTrackGeometryRunFailure =
-                                true;
-
-                            Console.WriteLine(
-                                $"{strTab1}WARNING: DBTrackGeometry export " +
-                                "cannot proceed because the captured data is NULL.");
-                        }
-                        else
-                        {
-                            try
+                            if (WriteDataToDBTrackGeometry &&
+                                dbTrackGeometryExporter is not null &&
+                                dbTrackGeometryExportContext is not null)
                             {
-                                DBTrackGeometryEpochBatch epochBatch =
-                                    dbTrackGeometryExporter
-                                        .PrepareEpochBatchAsync(
-                                            exportContext:
-                                                dbTrackGeometryExportContext,
-                                            pointEpochs:
-                                                dbTrackGeometryCaptureResult.PointEpochs,
-                                            pairEpochs:
-                                                dbTrackGeometryCaptureResult.PairEpochs)
-                                        .GetAwaiter()
-                                        .GetResult();
+                                if (!blnTrackSlewAndVersineSuccess)
+                                {
+                                    Console.WriteLine(
+                                        $"{strTab1}WARNING: Track Slew/Versine " +
+                                        "calculation did not succeed. Independent " +
+                                        "DBTrackGeometry categories will still be " +
+                                        "captured and processed.");
+                                }
 
-                                TrackGeometryExporter
-                                    .EchoEpochBatchValidationSummary(
-                                        epochBatch: epochBatch);
+                                try
+                                {
+                                    DBTrackGeometryDataCapture dataCapture =
+                                        new();
 
-                                DBTrackGeometryEpochWriteResult writeResult =
-                                    dbTrackGeometryExporter
-                                        .WriteEpochBatchAsync(
-                                            exportContext:
-                                                dbTrackGeometryExportContext,
-                                            epochBatch: epochBatch)
-                                        .GetAwaiter()
-                                        .GetResult();
+                                    dbTrackGeometryCaptureResult =
+                                        dataCapture.Capture(
+                                            prismList: prismList,
+                                            trackPairList: trackPairList,
+                                            strReportUtc: strTimeBlockEndUTC);
 
-                                TrackGeometryExporter.EchoEpochWriteSummary(
-                                    writeResult: writeResult);
+                                    Console.WriteLine(
+                                        $"{strTab1}DBTrackGeometry data captured");
 
-                                if (writeResult.Outcome != "Success")
+                                    Console.WriteLine(
+                                        $"{strTab2}Point epochs: " +
+                                        $"{dbTrackGeometryCaptureResult.PointEpochs.Count}");
+
+                                    Console.WriteLine(
+                                        $"{strTab2}Pair epochs: " +
+                                        $"{dbTrackGeometryCaptureResult.PairEpochs.Count}");
+                                }
+                                catch (Exception ex)
                                 {
                                     dbTrackGeometryRunFailure =
                                         true;
 
+                                    dbTrackGeometryCaptureResult = null;
+
                                     Console.WriteLine(
-                                        $"{strTab1}WARNING: DBTrackGeometry " +
-                                        $"completed with outcome " +
-                                        $"{writeResult.Outcome}. Existing report " +
-                                        "processing will continue.");
+                                        $"{strTab1}WARNING: DBTrackGeometry data " +
+                                        "capture failed. Existing report processing " +
+                                        "will continue.");
+
+                                    Console.WriteLine(
+                                        $"{strTab2}{ex.GetType().FullName}: " +
+                                        $"{ex.Message}");
                                 }
                             }
-                            catch (Exception ex)
+                            else if (WriteDataToDBTrackGeometry)
+                            {
+                                dbTrackGeometryRunFailure =
+                                    true;
+
+                                Console.WriteLine(
+                                    $"{strTab1}DBTrackGeometry data capture skipped " +
+                                    "because the process context is unavailable");
+                            }
+
+                            #endregion
+                            #region Write to DBTrackGeometry
+
+                            if (!WriteDataToDBTrackGeometry)
+                            {
+                                Console.WriteLine(
+                                    $"{strTab1}DBTrackGeometry export not required");
+                            }
+                            else if (dbTrackGeometryExporter is null ||
+                                dbTrackGeometryExportContext is null)
                             {
                                 dbTrackGeometryRunFailure =
                                     true;
 
                                 Console.WriteLine(
                                     $"{strTab1}WARNING: DBTrackGeometry export " +
-                                    "failed. Existing report processing will continue.");
+                                    "cannot proceed because the process context " +
+                                    "is unavailable.");
+                            }
+                            else if (dbTrackGeometryCaptureResult is null)
+                            {
+                                dbTrackGeometryRunFailure =
+                                    true;
 
                                 Console.WriteLine(
-                                    $"{strTab2}{ex.GetType().FullName}: " +
-                                    $"{ex.Message}");
+                                    $"{strTab1}WARNING: DBTrackGeometry export " +
+                                    "cannot proceed because the captured data is NULL.");
                             }
+                            else
+                            {
+                                try
+                                {
+                                    DBTrackGeometryEpochBatch epochBatch =
+                                        dbTrackGeometryExporter
+                                            .PrepareEpochBatchAsync(
+                                                exportContext:
+                                                    dbTrackGeometryExportContext,
+                                                pointEpochs:
+                                                    dbTrackGeometryCaptureResult.PointEpochs,
+                                                pairEpochs:
+                                                    dbTrackGeometryCaptureResult.PairEpochs)
+                                            .GetAwaiter()
+                                            .GetResult();
+
+                                    TrackGeometryExporter
+                                        .EchoEpochBatchValidationSummary(
+                                            epochBatch: epochBatch);
+
+                                    DBTrackGeometryEpochWriteResult writeResult =
+                                        dbTrackGeometryExporter
+                                            .WriteEpochBatchAsync(
+                                                exportContext:
+                                                    dbTrackGeometryExportContext,
+                                                epochBatch: epochBatch)
+                                            .GetAwaiter()
+                                            .GetResult();
+
+                                    TrackGeometryExporter.EchoEpochWriteSummary(
+                                        writeResult: writeResult);
+
+                                    if (writeResult.Outcome != "Success")
+                                    {
+                                        dbTrackGeometryRunFailure =
+                                            true;
+
+                                        Console.WriteLine(
+                                            $"{strTab1}WARNING: DBTrackGeometry " +
+                                            $"completed with outcome " +
+                                            $"{writeResult.Outcome}. Existing report " +
+                                            "processing will continue.");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    dbTrackGeometryRunFailure =
+                                        true;
+
+                                    Console.WriteLine(
+                                        $"{strTab1}WARNING: DBTrackGeometry export " +
+                                        "failed. Existing report processing will continue.");
+
+                                    Console.WriteLine(
+                                        $"{strTab2}{ex.GetType().FullName}: " +
+                                        $"{ex.Message}");
+                                }
+                            }
+
+
+                            #endregion
                         }
-
-
-                        #endregion
-
-
-
+                        else
+                        {
+                            Console.WriteLine(
+                                $"{strTab1}DBTrackGeometry export not required");
+                        }
 
                         #region Trigger Levels
 
@@ -2369,7 +2389,7 @@ namespace TrackGeometryReport
 
                         #endregion
 
-                        Console.WriteLine($"{strTab1}Time block completed\n");
+                        Console.WriteLine($"{strTab1}Time block completed\n--------------------------------------------");
                     }
                 }
 
